@@ -1,0 +1,51 @@
+# Gentoo theme for dialog(1). Meant to be used together with the palette change
+# done by gentoo_theme_apply (scripts/utils.sh): MAGENTA becomes Gentoo purple
+# (#54487a) and WHITE becomes Gentoo lavender (#dddaec). Without the palette
+# change this still works and just renders in the terminal's own colors.
+use_shadow = ON
+use_colors = ON
+
+screen_color = (WHITE,MAGENTA,ON)
+shadow_color = (BLACK,BLACK,ON)
+dialog_color = (BLACK,WHITE,OFF)
+title_color = (MAGENTA,WHITE,OFF)
+border_color = (MAGENTA,WHITE,OFF)
+border2_color = (MAGENTA,WHITE,OFF)
+
+button_active_color = (WHITE,MAGENTA,ON)
+button_inactive_color = (BLACK,WHITE,OFF)
+button_key_active_color = (WHITE,MAGENTA,ON)
+button_key_inactive_color = (RED,WHITE,OFF)
+button_label_active_color = (WHITE,MAGENTA,ON)
+button_label_inactive_color = (BLACK,WHITE,ON)
+
+menubox_color = (BLACK,WHITE,OFF)
+menubox_border_color = (MAGENTA,WHITE,OFF)
+menubox_border2_color = (MAGENTA,WHITE,OFF)
+item_color = (BLACK,WHITE,OFF)
+item_selected_color = (WHITE,MAGENTA,ON)
+tag_color = (MAGENTA,WHITE,OFF)
+tag_selected_color = (WHITE,MAGENTA,ON)
+tag_key_color = (RED,WHITE,OFF)
+tag_key_selected_color = (WHITE,MAGENTA,ON)
+
+check_color = (BLACK,WHITE,OFF)
+check_selected_color = (WHITE,MAGENTA,ON)
+
+inputbox_color = (BLACK,WHITE,OFF)
+inputbox_border_color = (MAGENTA,WHITE,OFF)
+inputbox_border2_color = (MAGENTA,WHITE,OFF)
+form_active_text_color = (WHITE,MAGENTA,ON)
+form_text_color = (BLACK,WHITE,OFF)
+form_item_readonly_color = (MAGENTA,WHITE,OFF)
+
+searchbox_color = (BLACK,WHITE,OFF)
+searchbox_title_color = (MAGENTA,WHITE,OFF)
+searchbox_border_color = (MAGENTA,WHITE,OFF)
+searchbox_border2_color = (MAGENTA,WHITE,OFF)
+
+position_indicator_color = (MAGENTA,WHITE,OFF)
+uarrow_color = (MAGENTA,WHITE,OFF)
+darrow_color = (MAGENTA,WHITE,OFF)
+itemhelp_color = (WHITE,MAGENTA,OFF)
+gauge_color = (WHITE,MAGENTA,ON)

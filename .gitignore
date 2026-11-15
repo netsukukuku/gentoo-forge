@@ -1,0 +1,4 @@
+# Your personal config (contains password hashes and your disk layout)
+gentoo.conf
+*.conf
+!gentoo.conf.example
