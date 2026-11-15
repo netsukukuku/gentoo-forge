@@ -400,7 +400,9 @@ function load_default_config() {
 	USER_PASSWORD_HASH=""
 	USER_SUDO=true
 
+	BOOTLOADER="systemd-boot"
 	DESKTOP="none"
+	DISPLAY_MANAGER="auto"
 	VIDEO_CARDS="auto"
 
 	function disk_configuration() {
@@ -674,9 +676,22 @@ function menu_select_device() {
 
 	while true; do
 		local all_devices=()
+		local seen_devices=" "
+		local real name size type model
+		# Devices with a stable id (preferred), without CD/DVD drives and loop devices.
 		for dev in /dev/disk/by-id/*; do
+			[[ -e $dev ]] || continue
+			real="$(realpath "$dev")"
+			[[ $real == /dev/sr* || $real == /dev/loop* ]] && continue
+			seen_devices+="$real "
 			all_devices+=("$dev" "$(basename "$dev")")
 		done
+		# Devices without any stable id (e.g. virtio disks in GNOME Boxes / QEMU have no serial).
+		while read -r name size type model; do
+			[[ $type == "disk" || $type == "part" ]] || continue
+			[[ $seen_devices == *" $name "* || $name == /dev/zram* ]] && continue
+			all_devices+=("$name" "$(basename "$name")  ($size${model:+, $model})")
+		done < <(lsblk -pnl -e 7,11 -o NAME,SIZE,TYPE,MODEL 2>/dev/null)
 		all_devices+=("/dev/null" "<enter custom path>")
 
 		if menu_radiolist_labeled "$title" "$desc" "$prev_selected" "${all_devices[@]}"; then
@@ -853,6 +868,7 @@ MENU_ITEMS=(
 	"PARTITIONING_BTRFS_RAID_TYPE"
 	"PARTITIONING_DEVICE"
 	"PARTITIONING_DEVICES"
+	"BOOTLOADER"
 	"--------"
 	"HOSTNAME"
 	"TIMEZONE"
@@ -869,6 +885,7 @@ MENU_ITEMS=(
 	"USER_SUDO"
 	"--------"
 	"DESKTOP"
+	"DISPLAY_MANAGER"
 	"VIDEO_CARDS"
 	"--------"
 	"NETWORK_BACKEND"
@@ -1410,6 +1427,35 @@ function USER_SUDO_menu()  {
 	UNSAVED_CHANGES=true
 }
 
+# ---- Bootloader --------------------------------------------------------
+
+function BOOTLOADER_tag()   { echo "Bootloader"; }
+function BOOTLOADER_label() {
+	if [[ $PARTITIONING_BOOT_TYPE == "bios" ]]; then
+		echo "(syslinux - BIOS)"
+	else
+		echo "($BOOTLOADER)"
+	fi
+}
+function BOOTLOADER_show()  { return 0; }
+function BOOTLOADER_help()  { echo "EFI installs can use systemd-boot (simple, default) or GRUB (more familiar, handles many setups). Both are kept up to date automatically when kernels are upgraded (installkernel + dracut). BIOS installs always use syslinux."; }
+function BOOTLOADER_menu()  {
+	if [[ $PARTITIONING_BOOT_TYPE == "bios" ]]; then
+		dialog --msgbox "BIOS installs always use syslinux. Switch the boot type to EFI (and enable EFI/UEFI in your VM or firmware) to choose GRUB or systemd-boot." 9 64
+		return 0
+	fi
+	if menu_radiolist_labeled \
+		"Bootloader" \
+		"Select the EFI bootloader." \
+		"$BOOTLOADER" \
+		"systemd-boot" "systemd-boot (default, simple)" \
+		"grub"         "GRUB 2"
+	then
+		BOOTLOADER="$dialog_out"
+		UNSAVED_CHANGES=true
+	fi
+}
+
 # ---- Desktop -----------------------------------------------------------
 
 function desktop_name() {
@@ -1418,6 +1464,7 @@ function desktop_name() {
 		plasma) echo "KDE Plasma" ;;
 		gnome)  echo "GNOME" ;;
 		xfce)   echo "Xfce" ;;
+		cosmic) echo "COSMIC (experimental)" ;;
 	esac
 }
 
@@ -1426,6 +1473,7 @@ function DESKTOP_label() { echo "($(desktop_name))"; }
 function DESKTOP_show()  { return 0; }
 function DESKTOP_help()  { echo "Installs a graphical desktop with display manager, PipeWire audio, Firefox and Xorg/Wayland support. The matching gentoo desktop profile is selected, and the system is updated for it (@world), exactly like the handbook describes. This takes a long time without the binary package host. Requires the plain 'systemd' or 'openrc' stage3 variant."; }
 function DESKTOP_menu()  {
+	local prev_desktop="$DESKTOP"
 	if [[ $STAGE3_VARIANT != "systemd" && $STAGE3_VARIANT != "openrc" ]]; then
 		dialog --msgbox "Desktop environments are only supported with the plain 'systemd' or 'openrc' stage3 variants. Change the stage3 variant first." 8 64
 		return 0
@@ -1437,15 +1485,59 @@ function DESKTOP_menu()  {
 		"none"   "None - console only (minimal system)" \
 		"plasma" "KDE Plasma (SDDM)" \
 		"gnome"  "GNOME (GDM)" \
-		"xfce"   "Xfce (LightDM) - lightweight"
+		"xfce"   "Xfce (LightDM) - lightweight" \
+		"cosmic" "COSMIC (cosmic-greeter) - EXPERIMENTAL, community overlay, long build"
 	then
 		DESKTOP="$dialog_out"
 		UNSAVED_CHANGES=true
+		# Keep the greeter choice valid for the new desktop.
+		if [[ $DESKTOP == "none" || ( $DISPLAY_MANAGER == "cosmic-greeter" && $DESKTOP != "cosmic" ) ]]; then
+			DISPLAY_MANAGER="auto"
+		fi
 		if [[ $DESKTOP != "none" && $NETWORK_BACKEND != "networkmanager" ]]; then
 			if dialog --yesno "Desktops are easiest to use with NetworkManager (graphical Wi-Fi/VPN settings). Switch the network setup to NetworkManager?" 8 64; then
 				NETWORK_BACKEND="networkmanager"
 			fi
 		fi
+	fi
+}
+
+function DISPLAY_MANAGER_tag()   { echo " ├ Login screen (greeter)"; }
+function DISPLAY_MANAGER_label() { echo " ├ ($(display_manager_name))"; }
+function DISPLAY_MANAGER_show()  { [[ $DESKTOP != "none" ]]; }
+function display_manager_name() {
+	case "$DISPLAY_MANAGER" in
+		auto)
+			case "$DESKTOP" in
+				plasma) echo "auto: SDDM" ;;
+				gnome)  echo "auto: GDM" ;;
+				xfce)   echo "auto: LightDM" ;;
+				cosmic) echo "auto: cosmic-greeter" ;;
+				*)      echo "auto" ;;
+			esac ;;
+		sddm)           echo "SDDM" ;;
+		gdm)            echo "GDM" ;;
+		lightdm)        echo "LightDM" ;;
+		cosmic-greeter) echo "cosmic-greeter (greetd)" ;;
+	esac
+}
+function DISPLAY_MANAGER_help()  { echo "The graphical login screen. 'auto' picks the usual one for the chosen desktop (SDDM for Plasma, GDM for GNOME, LightDM for Xfce, cosmic-greeter for COSMIC). Any of SDDM, GDM and LightDM can be combined with any desktop; cosmic-greeter only works with COSMIC."; }
+function DISPLAY_MANAGER_menu()  {
+	local items=(
+		"auto"    "Automatic (matches the desktop)"
+		"sddm"    "SDDM (KDE's login screen)"
+		"gdm"     "GDM (GNOME's login screen)"
+		"lightdm" "LightDM (lightweight, GTK greeter)"
+	)
+	[[ $DESKTOP == "cosmic" ]] && items+=("cosmic-greeter" "cosmic-greeter (via greetd)")
+	if menu_radiolist_labeled \
+		"Login screen" \
+		"Select the graphical login screen (display manager / greeter)." \
+		"$DISPLAY_MANAGER" \
+		"${items[@]}"
+	then
+		DISPLAY_MANAGER="$dialog_out"
+		UNSAVED_CHANGES=true
 	fi
 }
 
@@ -1463,6 +1555,7 @@ function VIDEO_CARDS_menu()  {
 		"intel"    "Intel" \
 		"nouveau"  "NVIDIA (open source nouveau)" \
 		"virgl"    "Virtual machine (virtio / QEMU)" \
+		"qxl"      "Virtual machine (QXL / SPICE, e.g. GNOME Boxes)" \
 		"vmware"   "Virtual machine (VMware)" \
 		"fbdev"    "Generic framebuffer (fallback)"
 	then
@@ -1793,7 +1886,9 @@ USER_SUDO=${USER_SUDO@Q}
 ################################################
 # Desktop
 
+BOOTLOADER=${BOOTLOADER@Q}
 DESKTOP=${DESKTOP@Q}
+DISPLAY_MANAGER=${DISPLAY_MANAGER@Q}
 VIDEO_CARDS=${VIDEO_CARDS@Q}
 
 

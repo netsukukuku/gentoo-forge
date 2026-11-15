@@ -7,12 +7,39 @@ source "$GENTOO_INSTALL_REPO_DIR/scripts/protection.sh" || exit 1
 
 function sync_time() {
 	einfo "Syncing time"
-	try ntpd -g -q
+	# ntpd is broken on current Arch ISOs (missing libcrypto), so prefer the
+	# systemd-timesyncd of the live environment, and never abort over this:
+	# the clock of a live ISO / VM is normally right already.
+	if type ntpd &>/dev/null && ntpd -g -q &>/dev/null; then
+		:
+	elif type timedatectl &>/dev/null && timedatectl set-ntp true &>/dev/null; then
+		local i
+		for i in {1..15}; do
+			[[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" == "yes" ]] && break
+			sleep 1
+		done
+	else
+		ewarn "Could not synchronize the clock automatically, continuing with the current time."
+	fi
 
 	einfo "Current date: $(LANG=C date)"
 	einfo "Writing time to hardware clock"
 	hwclock --systohc --utc \
-		|| die "Could not save time to hardware clock"
+		|| ewarn "Could not save time to the hardware clock (continuing)"
+}
+
+# Refuses targets that can never be an installation disk (CD/DVD drive, loop device),
+# so a wrong pick in the device list can't turn into a confusing failure later.
+function verify_target_device_is_disk() {
+	local device="$1" type
+	[[ -b $device ]] \
+		|| die "'$device' is not a block device"
+	type="$(lsblk -dno TYPE "$device" 2>/dev/null)"
+	case "$type" in
+		rom|loop)
+			die "'$device' is a '$type' device (CD/DVD drive or loop device), not a disk you can install to. Choose your real disk (e.g. /dev/vda or /dev/sda) in the configurator."
+			;;
+	esac
 }
 
 # Defaults for options that older config files do not define yet.
@@ -29,6 +56,8 @@ function apply_config_defaults() {
 	: "${USER_PASSWORD_HASH:=}"
 	: "${USER_SUDO:=true}"
 	: "${DESKTOP:=none}"
+	: "${DISPLAY_MANAGER:=auto}"
+	: "${BOOTLOADER:=systemd-boot}"
 	: "${VIDEO_CARDS:=auto}"
 	: "${USE_BINHOST:=true}"
 	: "${USE_PORTAGE_TESTING:=false}"
@@ -48,12 +77,18 @@ function check_config() {
 	if [[ -n $USER_NAME && $USER_SUDO != "true" && $ROOT_PASSWORD_MODE == "locked" ]]; then
 		die "Root is locked and '$USER_NAME' has no administrator rights. Enable sudo for the user or keep root unlocked."
 	fi
-	[[ $DESKTOP =~ ^(none|plasma|gnome|xfce)$ ]] \
-		|| die "DESKTOP must be one of: none, plasma, gnome, xfce"
+	[[ $DESKTOP =~ ^(none|plasma|gnome|xfce|cosmic)$ ]] \
+		|| die "DESKTOP must be one of: none, plasma, gnome, xfce, cosmic"
 	if [[ $DESKTOP != "none" ]]; then
 		[[ $STAGE3_VARIANT == "systemd" || $STAGE3_VARIANT == "openrc" ]] \
 			|| die "Desktop environments are only supported with the plain 'systemd' or 'openrc' stage3 variants."
 	fi
+	[[ $BOOTLOADER =~ ^(systemd-boot|grub)$ ]] \
+		|| die "BOOTLOADER must be one of: systemd-boot, grub"
+	[[ $DISPLAY_MANAGER =~ ^(auto|sddm|gdm|lightdm|cosmic-greeter)$ ]] \
+		|| die "DISPLAY_MANAGER must be one of: auto, sddm, gdm, lightdm, cosmic-greeter"
+	[[ $DISPLAY_MANAGER != "cosmic-greeter" || $DESKTOP == "cosmic" ]] \
+		|| die "DISPLAY_MANAGER=cosmic-greeter requires DESKTOP=cosmic"
 	[[ $NETWORK_BACKEND =~ ^(wired|iwd|networkmanager)$ ]] \
 		|| die "NETWORK_BACKEND must be one of: wired, iwd, networkmanager"
 
@@ -92,6 +127,11 @@ function check_config() {
 	else
 		IS_EFI=false
 	fi
+
+	if [[ $BOOTLOADER == "grub" && $IS_EFI != "true" ]]; then
+		ewarn "BOOTLOADER=grub is only supported for EFI installs; BIOS installs use syslinux."
+		BOOTLOADER="systemd-boot"
+	fi
 }
 
 function preprocess_config() {
@@ -112,7 +152,6 @@ function prepare_installation_environment() {
 		gpg
 		hwclock
 		lsblk
-		ntpd
 		partprobe
 		python3
 		"?rhash"
@@ -220,6 +259,7 @@ function disk_create_gpt() {
 		if [[ -v arguments[id] ]]; then
 			add_summary_entry "${arguments[id]}" "$new_id" "gpt" "" ""
 		else
+			verify_target_device_is_disk "${arguments[device]}"
 			add_summary_entry __root__ "$new_id" "${arguments[device]}" "(gpt)" ""
 		fi
 		return 0

@@ -99,6 +99,7 @@ function resolve_video_cards() {
 			0x10de) cards+=("nouveau") ;;
 			0x15ad) cards+=("vmware") ;;
 			0x1af4) cards+=("virgl") ;;
+			0x1b36) cards+=("qxl") ;;
 		esac
 	done
 
@@ -118,17 +119,43 @@ function calculate_makeopts() {
 	echo "-j$jobs"
 }
 
+# Merges pending ._cfg files that portage's autounmask wrote (USE flags, keywords, licenses).
+function etc_update_auto() {
+	command -v etc-update &>/dev/null || return 0
+	etc-update --automode -5 &>/dev/null \
+		|| ewarn "etc-update could not merge pending configuration changes; check /etc/portage for ._cfg* files."
+}
+
+# emerge with automatic handling of the usual "needs a USE flag / keyword / license" failures:
+# portage computes the required changes, they are written to /etc/portage (permanently, so later
+# upgrades work too), merged, and the merge continues. A second attempt follows if the first one
+# stopped, because merging the changes can unlock further steps. Real failures (blockers,
+# compile errors) still end up in the interactive try prompt.
+function emerge_auto() {
+	local opts=(--verbose --autounmask=y --autounmask-write=y --autounmask-continue=y)
+	emerge "${opts[@]}" "$@"
+	local rc=$?
+	etc_update_auto
+	if [[ $rc != 0 ]]; then
+		ewarn "emerge stopped; retrying once after applying portage's suggested configuration changes"
+		emerge "${opts[@]}" "$@"
+		rc=$?
+		etc_update_auto
+	fi
+	return "$rc"
+}
+
 function configure_portage() {
 	# Prepare /etc/portage for autounmask
 	mkdir_or_die 0755 "/etc/portage/package.use"
 	touch_or_die 0644 "/etc/portage/package.use/zz-autounmask"
-	mkdir_or_die 0755 "/etc/portage/package.keywords"
-	touch_or_die 0644 "/etc/portage/package.keywords/zz-autounmask"
+	mkdir_or_die 0755 "/etc/portage/package.accept_keywords"
+	touch_or_die 0644 "/etc/portage/package.accept_keywords/zz-autounmask"
 	touch_or_die 0644 "/etc/portage/package.license"
 
 	if [[ $SELECT_MIRRORS == "true" ]]; then
 		einfo "Temporarily installing mirrorselect"
-		try emerge --verbose --oneshot app-portage/mirrorselect
+		try emerge_auto --oneshot app-portage/mirrorselect
 
 		einfo "Selecting fastest portage mirrors"
 		local mirrorselect_params=("-s" "4" "-b" "10")
@@ -146,9 +173,14 @@ function configure_portage() {
 		echo "MAKEOPTS=\"$(calculate_makeopts)\""
 		[[ -n $video_cards ]] \
 			&& echo "VIDEO_CARDS=\"$video_cards\""
+		[[ $IS_EFI == "true" && $BOOTLOADER == "grub" && $GENTOO_ARCH == "amd64" ]] \
+			&& echo 'GRUB_PLATFORMS="efi-64"'
 		if [[ $USE_BINHOST == "true" ]]; then
 			echo "# Use the official gentoo binary package host where possible (falls back to source builds)."
 			echo "FEATURES=\"getbinpkg binpkg-request-signature\""
+			# FEATURES alone only allows fetching; emerge must also be told to prefer binary packages.
+			# binpkg-respect-use makes portage compile from source when the USE flags differ.
+			echo "EMERGE_DEFAULT_OPTS=\"--getbinpkg --binpkg-respect-use=y\""
 		fi
 	} >> /etc/portage/make.conf \
 		|| die "Could not modify /etc/portage/make.conf"
@@ -175,7 +207,7 @@ function select_profile() {
 	case "$DESKTOP" in
 		plasma) sub="/desktop/plasma" ;;
 		gnome)  sub="/desktop/gnome" ;;
-		xfce)   sub="/desktop" ;;
+		xfce|cosmic) sub="/desktop" ;;
 	esac
 	[[ $SYSTEMD == "true" ]] \
 		&& sub="$sub/systemd"
@@ -262,9 +294,17 @@ function newest_installed_kver() {
 	echo "${f#vmlinuz-}"
 }
 
-# EFI: systemd-boot on the ESP (mounted at /boot), managed by installkernel/kernel-install.
+# EFI: systemd-boot or GRUB on the ESP (mounted at /boot), managed by installkernel.
 # Every future kernel upgrade automatically creates the boot entry + initramfs.
 function install_bootloader_efi() {
+	if [[ $BOOTLOADER == "grub" ]]; then
+		install_bootloader_efi_grub_prepare
+	else
+		install_bootloader_efi_systemd_boot
+	fi
+}
+
+function install_bootloader_efi_systemd_boot() {
 	einfo "Preparing systemd-boot and installkernel"
 	mkdir_or_die 0755 /etc/portage/package.use
 	if [[ $SYSTEMD == "true" ]]; then
@@ -278,11 +318,11 @@ function install_bootloader_efi() {
 		|| die "Could not write package.use"
 
 	if [[ $SYSTEMD == "true" ]]; then
-		try emerge --verbose --oneshot sys-apps/systemd
+		try emerge_auto --oneshot sys-apps/systemd
 	else
-		try emerge --verbose --oneshot sys-apps/systemd-utils
+		try emerge_auto --oneshot sys-apps/systemd-utils
 	fi
-	try emerge --verbose sys-kernel/installkernel sys-kernel/dracut
+	try emerge_auto sys-kernel/installkernel sys-kernel/dracut
 
 	configure_dracut
 
@@ -301,13 +341,80 @@ editor no
 EOF
 }
 
+# GRUB (EFI). Kernels and initramfs live on the ESP at /boot; installkernel regenerates
+# grub.cfg whenever a kernel is installed. Part 1 runs before the kernel is installed.
+function install_bootloader_efi_grub_prepare() {
+	einfo "Preparing GRUB and installkernel"
+	mkdir_or_die 0755 /etc/portage/package.use
+	mkdir_or_die 0755 /boot/grub
+	echo "sys-kernel/installkernel dracut grub -systemd -systemd-boot" > /etc/portage/package.use/installkernel \
+		|| die "Could not write package.use"
+	try emerge_auto sys-kernel/installkernel sys-kernel/dracut sys-boot/grub sys-boot/efibootmgr
+
+	configure_dracut
+
+	cat > /etc/default/grub <<EOF
+# Generated by gentoo-install
+GRUB_DISTRIBUTOR="Gentoo"
+GRUB_TIMEOUT=3
+GRUB_CMDLINE_LINUX="$(get_cmdline)"
+GRUB_DISABLE_OS_PROBER=true
+EOF
+	chmod 644 /etc/default/grub
+
+	# Fallback for kernels installed without installkernel's grub plugin.
+	mkdir_or_die 0755 /etc/kernel/postinst.d
+	cat > /etc/kernel/postinst.d/95-gentoo-install-grub <<'EOF'
+#!/bin/sh
+# Installed by gentoo-install: regenerate grub.cfg after a kernel installation,
+# unless installkernel's own grub plugin already does it.
+[ -e /usr/lib/kernel/postinst.d/91-grub-mkconfig.install ] && exit 0
+command -v grub-mkconfig >/dev/null 2>&1 || exit 0
+exec grub-mkconfig -o /boot/grub/grub.cfg
+EOF
+	chmod 755 /etc/kernel/postinst.d/95-gentoo-install-grub \
+		|| die "Could not chmod kernel hook"
+}
+
+# GRUB part 2: runs after the kernel is installed.
+function install_bootloader_efi_grub_finish() {
+	local target="x86_64-efi"
+	[[ $GENTOO_ARCH == "amd64" ]] \
+		|| die "The grub bootloader option is only implemented for amd64."
+
+	einfo "Installing GRUB to the EFI system partition"
+	try grub-install --target="$target" --efi-directory=/boot --bootloader-id=Gentoo
+	# Also install to the removable/fallback path, so the VM / firmware boots even if
+	# the NVRAM boot entry is lost (common with virtual machines).
+	try grub-install --target="$target" --efi-directory=/boot --removable
+
+	einfo "Generating grub.cfg"
+	mkdir_or_die 0755 /boot/grub
+	if ! grub-mkconfig -o /boot/grub/grub.cfg || ! grep -q '^[[:space:]]*linux[[:space:]]' /boot/grub/grub.cfg 2>/dev/null; then
+		ewarn "grub-mkconfig did not produce a boot entry inside the chroot; writing a static fallback grub.cfg."
+		ewarn "It is replaced by a generated one automatically on the next kernel installation."
+		local kver
+		kver="$(newest_installed_kver)" \
+			|| die "No kernel found in /boot"
+		cat > /boot/grub/grub.cfg <<EOF
+set timeout=3
+set default=0
+menuentry "Gentoo Linux ($kver)" {
+	search --no-floppy --fs-uuid --set=root $(get_blkid_uuid_for_id "$DISK_ID_EFI")
+	linux /vmlinuz-$kver $(get_cmdline)
+	initrd /initramfs-$kver.img
+}
+EOF
+	fi
+}
+
 # BIOS (legacy): syslinux on the FAT boot partition. A kernel postinst hook keeps it
 # in sync with new kernels, so upgrades stay bootable here too.
 function install_bootloader_bios_prepare() {
 	mkdir_or_die 0755 /etc/portage/package.use
 	echo "sys-kernel/installkernel dracut -systemd" > /etc/portage/package.use/installkernel \
 		|| die "Could not write package.use"
-	try emerge --verbose sys-kernel/installkernel sys-kernel/dracut sys-boot/syslinux
+	try emerge_auto sys-kernel/installkernel sys-kernel/dracut sys-boot/syslinux
 	configure_dracut
 }
 
@@ -352,7 +459,7 @@ function install_kernel() {
 	einfo "Installing firmware"
 	echo "sys-kernel/linux-firmware linux-fw-redistributable no-source-code" >> /etc/portage/package.license \
 		|| die "Could not write to /etc/portage/package.license"
-	try emerge --verbose sys-kernel/linux-firmware
+	try emerge_auto sys-kernel/linux-firmware
 
 	if [[ $IS_EFI == "true" ]]; then
 		install_bootloader_efi
@@ -364,23 +471,23 @@ function install_kernel() {
 	# so the initramfs generated for it can include the matching dracut modules.
 	[[ $USED_RAID == "true" ]] && {
 		einfo "Installing mdadm"
-		try emerge --verbose sys-fs/mdadm
+		try emerge_auto sys-fs/mdadm
 	}
 	[[ $USED_LUKS == "true" ]] && {
 		einfo "Installing cryptsetup"
-		try emerge --verbose sys-fs/cryptsetup
+		try emerge_auto sys-fs/cryptsetup
 	}
 	[[ $USED_BTRFS == "true" ]] && {
 		einfo "Installing btrfs-progs"
-		try emerge --verbose sys-fs/btrfs-progs
+		try emerge_auto sys-fs/btrfs-progs
 	}
 
 	einfo "Installing the gentoo distribution kernel (binary)"
-	try emerge --verbose sys-kernel/gentoo-kernel-bin
+	try emerge_auto sys-kernel/gentoo-kernel-bin
 
 	if [[ $USED_ZFS == "true" ]]; then
 		einfo "Installing zfs"
-		try emerge --verbose sys-fs/zfs sys-fs/zfs-kmod
+		try emerge_auto sys-fs/zfs sys-fs/zfs-kmod
 
 		einfo "Enabling zfs services"
 		if [[ $SYSTEMD == "true" ]]; then
@@ -395,10 +502,13 @@ function install_kernel() {
 
 		# Reinstall the kernel so the initramfs is regenerated with the zfs module.
 		einfo "Regenerating initramfs with zfs support"
-		try emerge --verbose --oneshot sys-kernel/gentoo-kernel-bin
+		try emerge_auto --oneshot sys-kernel/gentoo-kernel-bin
 	fi
 
-	if [[ $IS_EFI != "true" ]]; then
+	if [[ $IS_EFI == "true" ]]; then
+		[[ $BOOTLOADER == "grub" ]] \
+			&& install_bootloader_efi_grub_finish
+	else
 		install_bootloader_bios_finish
 	fi
 }
@@ -474,7 +584,7 @@ function setup_sudo() {
 	[[ -n $USER_NAME && $USER_SUDO == "true" ]] || return 0
 
 	einfo "Installing sudo and allowing the wheel group"
-	try emerge --verbose app-admin/sudo
+	try emerge_auto app-admin/sudo
 	mkdir_or_die 0750 /etc/sudoers.d
 	install -m0440 -o root -g root /dev/null /etc/sudoers.d/10-wheel \
 		|| die "Could not create /etc/sudoers.d/10-wheel"
@@ -509,7 +619,7 @@ function configure_wired_network() {
 			|| die "Could not change permissions of '/etc/systemd/network/20-wired.network'"
 	else
 		einfo "Installing dhcpcd"
-		try emerge --verbose net-misc/dhcpcd
+		try emerge_auto net-misc/dhcpcd
 		if [[ $mode == "dhcp" ]]; then
 			# Leave wifi interfaces to iwd.
 			echo "allowinterfaces en* eth*" >> /etc/dhcpcd.conf \
@@ -526,9 +636,9 @@ function configure_network() {
 			local resolver="systemd"
 			if [[ $SYSTEMD != "true" ]]; then
 				resolver="resolvconf"
-				try emerge --verbose net-dns/openresolv
+				try emerge_auto net-dns/openresolv
 			fi
-			try emerge --verbose net-wireless/iwd
+			try emerge_auto net-wireless/iwd
 			mkdir_or_die 0755 /etc/iwd
 			cat > /etc/iwd/main.conf <<EOF
 [General]
@@ -546,7 +656,7 @@ EOF
 			einfo "Installing NetworkManager"
 			echo "net-misc/networkmanager wifi" > /etc/portage/package.use/gentoo-install-network \
 				|| die "Could not write package.use"
-			try emerge --verbose net-misc/networkmanager
+			try emerge_auto net-misc/networkmanager
 			if [[ $SYSTEMD != "true" ]]; then
 				try rc-update add dbus default
 			fi
@@ -558,10 +668,52 @@ EOF
 	esac
 }
 
+# Resolves a bare package name to category/name inside the cosmic-overlay.
+function overlay_atom() {
+	local path
+	path="$(compgen -G "/var/db/repos/cosmic-overlay/*/$1" | head -n 1)" \
+		&& [[ -n $path ]] \
+		&& echo "${path#/var/db/repos/cosmic-overlay/}"
+}
+
+# COSMIC is not in the main gentoo tree (as of writing); it comes from a community overlay.
+function setup_cosmic_overlay() {
+	ewarn "COSMIC is not in the main Gentoo tree: using the community 'cosmic-overlay' (experimental)."
+	try emerge_auto --oneshot app-eselect/eselect-repository
+	try eselect repository add cosmic-overlay git https://github.com/fsvm88/cosmic-overlay
+	try emaint sync -r cosmic-overlay
+	mkdir_or_die 0755 /etc/portage/package.accept_keywords
+	# Accept the tagged (testing-keyword) releases of everything from this overlay.
+	echo '*/*::cosmic-overlay' > /etc/portage/package.accept_keywords/cosmic-de \
+		|| die "Could not write package.accept_keywords"
+	overlay_atom cosmic-meta >/dev/null \
+		|| die "cosmic-meta is not in the cosmic-overlay (layout changed?). Choose another desktop."
+}
+
+function configure_greetd_cosmic() {
+	einfo "Configuring greetd with cosmic-greeter"
+	mkdir_or_die 0755 /etc/greetd
+	cat > /etc/greetd/config.toml <<'EOF'
+[terminal]
+vt = 7
+
+[default_session]
+command = "/usr/bin/cosmic-comp /usr/bin/cosmic-greeter"
+user = "cosmic-greeter"
+EOF
+	chmod 644 /etc/greetd/config.toml
+	getent passwd cosmic-greeter &>/dev/null \
+		|| ewarn "User 'cosmic-greeter' does not exist; the login screen will not start until it is created."
+	if [[ $SYSTEMD != "true" ]]; then
+		[[ -f /etc/conf.d/display-manager ]] \
+			&& { grep -q '^CHECKVT=' /etc/conf.d/display-manager || echo 'CHECKVT=7' >> /etc/conf.d/display-manager; }
+	fi
+}
+
 function install_desktop() {
 	[[ $DESKTOP != "none" ]] || return 0
 
-	local dm
+	local dm="$DISPLAY_MANAGER"
 	local pkgs=(
 		x11-base/xorg-server
 		x11-base/xorg-drivers
@@ -573,17 +725,27 @@ function install_desktop() {
 	)
 	case "$DESKTOP" in
 		plasma)
-			dm="sddm"
-			pkgs+=(kde-plasma/plasma-meta kde-apps/konsole kde-apps/dolphin x11-misc/sddm)
+			[[ $dm == "auto" ]] && dm="sddm"
+			pkgs+=(kde-plasma/plasma-meta kde-apps/konsole kde-apps/dolphin)
 			;;
 		gnome)
-			dm="gdm"
-			pkgs+=(gnome-base/gnome-light gnome-base/gdm x11-terms/gnome-terminal)
+			[[ $dm == "auto" ]] && dm="gdm"
+			pkgs+=(gnome-base/gnome-light x11-terms/gnome-terminal)
 			;;
 		xfce)
-			dm="lightdm"
-			pkgs+=(xfce-base/xfce4-meta x11-misc/lightdm x11-misc/lightdm-gtk-greeter)
+			[[ $dm == "auto" ]] && dm="lightdm"
+			pkgs+=(xfce-base/xfce4-meta)
 			;;
+		cosmic)
+			[[ $dm == "auto" ]] && dm="cosmic-greeter"
+			;;
+	esac
+	local overlay_pkgs=()
+	case "$dm" in
+		cosmic-greeter) pkgs+=(gui-libs/greetd); overlay_pkgs+=(cosmic-greeter) ;;
+		sddm)    pkgs+=(x11-misc/sddm) ;;
+		gdm)     pkgs+=(gnome-base/gdm) ;;
+		lightdm) pkgs+=(x11-misc/lightdm x11-misc/lightdm-gtk-greeter) ;;
 	esac
 	if [[ $SYSTEMD != "true" ]]; then
 		pkgs+=(sys-auth/elogind sys-apps/dbus gui-libs/display-manager-init)
@@ -594,7 +756,25 @@ function install_desktop() {
 		|| die "Could not write package.use"
 	local available
 	readarray -t available < <(existing_atoms "${pkgs[@]}")
-	try emerge --verbose --autounmask-continue=y -- "${available[@]}"
+	try emerge_auto -- "${available[@]}"
+
+	if [[ $DESKTOP == "cosmic" ]]; then
+		setup_cosmic_overlay
+		local cosmic_atoms=() name atom
+		for name in cosmic-meta pop-theme-meta "${overlay_pkgs[@]}"; do
+			atom="$(overlay_atom "$name")" \
+				|| die "Package '$name' was not found in the cosmic-overlay. The overlay layout may have changed; choose another desktop."
+			cosmic_atoms+=("$atom")
+		done
+		einfo "Installing COSMIC (compiled from source, this takes a long time)"
+		try emerge_auto -- "${cosmic_atoms[@]}"
+	fi
+
+	# cosmic-greeter runs on top of greetd.
+	if [[ $dm == "cosmic-greeter" ]]; then
+		configure_greetd_cosmic
+		dm="greetd"
+	fi
 
 	einfo "Enabling the display manager ($dm)"
 	if [[ $SYSTEMD == "true" ]]; then
@@ -647,7 +827,7 @@ function main_install_gentoo_in_chroot() {
 
 	# Install git (for git portage overlays)
 	einfo "Installing git"
-	try emerge --verbose dev-vcs/git
+	try emerge_auto dev-vcs/git
 
 	if [[ "$PORTAGE_SYNC_TYPE" == "git" ]]; then
 		mkdir_or_die 0755 "/etc/portage/repos.conf"
@@ -675,7 +855,7 @@ EOF
 	# many packages incompatible with the binary package host, so they are skipped there.
 	if [[ $USE_BINHOST != "true" && ( $GENTOO_ARCH == "amd64" || $GENTOO_ARCH == "x86" ) ]]; then
 		einfo "Detecting CPU flags"
-		try emerge --verbose --oneshot app-portage/cpuid2cpuflags
+		try emerge_auto --oneshot app-portage/cpuid2cpuflags
 		echo "*/* $(cpuid2cpuflags)" > /etc/portage/package.use/00cpu-flags \
 			|| die "Could not write CPU flags"
 	fi
@@ -683,7 +863,7 @@ EOF
 	# Choose the profile for the init system / desktop, then update the system to match.
 	if select_profile; then
 		einfo "Updating the system for the new profile (@world)"
-		try emerge --verbose --update --deep --newuse @world
+		try emerge_auto --update --deep --newuse @world
 	fi
 
 	# Install kernel, initramfs and bootloader
@@ -694,7 +874,7 @@ EOF
 
 	# Install gentoolkit
 	einfo "Installing gentoolkit"
-	try emerge --verbose app-portage/gentoolkit
+	try emerge_auto app-portage/gentoolkit
 
 	configure_network
 	setup_sudo
@@ -703,7 +883,7 @@ EOF
 	# Install additional packages, if any.
 	if [[ ${#ADDITIONAL_PACKAGES[@]} -gt 0 ]]; then
 		einfo "Installing additional packages"
-		try emerge --verbose --autounmask-continue=y -- "${ADDITIONAL_PACKAGES[@]}"
+		try emerge_auto -- "${ADDITIONAL_PACKAGES[@]}"
 	fi
 
 	# If configured, change to gentoo testing at the very end, so the installation

@@ -223,15 +223,27 @@ USER_SUDO=true
 
 
 ################################################
+# Bootloader
+
+# systemd-boot | grub   (EFI only; BIOS installs always use syslinux)
+# Both are maintained automatically on kernel upgrades through installkernel + dracut.
+BOOTLOADER="systemd-boot"
+
+
+################################################
 # Desktop
 
-# none | plasma | gnome | xfce
+# none | plasma | gnome | xfce | cosmic
+# (cosmic is experimental: it comes from a community overlay and is compiled from source.)
 # Selects the matching gentoo desktop profile (as the handbook does), updates the system
 # (@world) and installs the desktop with display manager, PipeWire audio and Firefox.
 # Requires STAGE3_VARIANT="systemd" or "openrc".
 DESKTOP="none"
+# Login screen: auto | sddm | gdm | lightdm | cosmic-greeter (cosmic-greeter needs DESKTOP="cosmic").
+# "auto" = SDDM for plasma, GDM for gnome, LightDM for xfce, cosmic-greeter for cosmic.
+DISPLAY_MANAGER="auto"
 # Graphics drivers (VIDEO_CARDS in make.conf). "auto" detects your GPU(s).
-# Other values: amd, intel, nouveau, virgl, vmware, fbdev, or any VIDEO_CARDS string.
+# Other values: amd, intel, nouveau, virgl (virtio), qxl (GNOME Boxes/SPICE), vmware, fbdev, or any VIDEO_CARDS string.
 VIDEO_CARDS="auto"
 
 
