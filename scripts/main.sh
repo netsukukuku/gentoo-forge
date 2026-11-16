@@ -815,19 +815,43 @@ function setup_cosmic_overlay() {
 		|| die "cosmic-meta is not in the cosmic-overlay (layout changed?). Choose another desktop."
 }
 
-# Enables a third-party repository (idempotent). $1: name, $2: optional git url if it is not
-# in the eselect-repository list.
+# Enables a third-party repository (idempotent). $1: name, $2: optional git url used if the
+# repository is not in the eselect-repository list or its sync fails. Prints the failing step.
 function enable_overlay() {
 	local name="$1" url="${2:-}"
+	# Mirror of GURU on GitHub, used when eselect-repository / the default sync location fails.
+	[[ $name == "guru" && -z $url ]] && url="https://github.com/gentoo-mirror/guru.git"
+
 	if [[ ! -x /usr/bin/eselect-repository && ! -e /usr/share/eselect/modules/repository.eselect ]]; then
-		try emerge_auto --oneshot app-eselect/eselect-repository
+		emerge_auto --oneshot app-eselect/eselect-repository \
+			|| { ewarn "Could not install app-eselect/eselect-repository."; return 1; }
 	fi
-	if [[ ! -d /var/db/repos/$name ]]; then
-		eselect repository enable "$name" \
-			|| { [[ -n $url ]] && eselect repository add "$name" git "$url"; } \
-			|| return 1
-		emaint sync -r "$name" || return 1
+	if [[ -d /var/db/repos/$name/profiles ]]; then
+		return 0
 	fi
+	# Remove an empty or half-synced leftover directory.
+	rm -rf "/var/db/repos/$name"
+
+	if ! eselect repository enable "$name"; then
+		ewarn "'eselect repository enable $name' failed; adding it as a git repository instead."
+		eselect repository add "$name" git "$url" \
+			|| { ewarn "Could not add the '$name' repository."; return 1; }
+	fi
+	local attempt
+	for attempt in 1 2 3; do
+		emaint sync -r "$name" && [[ -d /var/db/repos/$name/profiles ]] && return 0
+		ewarn "Sync of the '$name' repository failed (attempt $attempt/3)."
+		sleep 3
+	done
+	if [[ -n $url ]]; then
+		ewarn "Switching '$name' to $url and syncing again."
+		eselect repository remove "$name" &>/dev/null
+		rm -rf "/var/db/repos/$name"
+		eselect repository add "$name" git "$url" || return 1
+		emaint sync -r "$name" && [[ -d /var/db/repos/$name/profiles ]] && return 0
+	fi
+	ewarn "Could not sync the '$name' repository (network problem?)."
+	return 1
 }
 
 # Browsers that are not in the main tree come from overlays. If anything about that fails,
@@ -858,8 +882,13 @@ function install_xone() {
 	[[ $GENTOO_ARCH == "amd64" ]] || { ewarn "xone is only enabled for amd64; skipping."; return 0; }
 
 	einfo "Installing the xone Xbox wireless driver (GURU overlay)"
-	if ! enable_overlay guru || [[ ! -d /var/db/repos/guru/games-util/xone ]]; then
-		ewarn "games-util/xone was not found in the guru repository; skipping the Xbox driver."
+	if ! enable_overlay guru; then
+		ewarn "The guru repository could not be set up; skipping the Xbox driver."
+		return 0
+	fi
+	if [[ ! -d /var/db/repos/guru/games-util/xone ]]; then
+		ewarn "The guru repository is synced but has no games-util/xone ebuild; skipping the Xbox driver."
+		ewarn "Contents of games-util in guru: $(ls /var/db/repos/guru/games-util 2>/dev/null | tr '\n' ' ')"
 		return 0
 	fi
 	mkdir_or_die 0755 /etc/portage/package.accept_keywords
