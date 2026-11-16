@@ -82,13 +82,16 @@ function resolve_video_cards() {
 	if [[ $VIDEO_CARDS == "amd" ]]; then
 		echo "amdgpu radeonsi"
 		return 0
+	elif [[ $VIDEO_CARDS == "nvidia" ]]; then
+		echo "nvidia"
+		return 0
 	elif [[ $VIDEO_CARDS != "auto" ]]; then
 		echo "$VIDEO_CARDS"
 		return 0
 	fi
 
 	local cards=()
-	local dev vendor
+	local dev vendor device
 	for dev in /sys/bus/pci/devices/*; do
 		[[ -r "$dev/class" && -r "$dev/vendor" ]] || continue
 		# PCI base class 0x03 = display controller
@@ -97,7 +100,16 @@ function resolve_video_cards() {
 		case "$vendor" in
 			0x1002) cards+=("amdgpu" "radeonsi") ;;
 			0x8086) cards+=("intel") ;;
-			0x10de) cards+=("nouveau") ;;
+			0x10de)
+				# GeForce RTX 50 series (Blackwell, device ids 0x2900 and up) is not supported
+				# by nouveau in a usable way and needs NVIDIA's driver with open kernel modules.
+				device="$(<"$dev/device")"
+				if (( device >= 0x2900 )); then
+					cards+=("nvidia")
+				else
+					cards+=("nouveau")
+				fi
+				;;
 			0x15ad) cards+=("vmware") ;;
 			0x1af4) cards+=("virgl") ;;
 			0x1b36) cards+=("qxl") ;;
@@ -335,6 +347,49 @@ add_dracutmodules+=" ${modules[*]} "
 EOF
 	chmod 644 /etc/dracut.conf.d/10-gentoo-install.conf \
 		|| die "Could not chmod dracut config"
+
+	# With NVIDIA's proprietary driver, nouveau must not claim the GPU (also not from the initramfs).
+	if uses_nvidia_driver; then
+		echo 'omit_drivers+=" nouveau "' > /etc/dracut.conf.d/20-gentoo-install-nvidia.conf \
+			|| die "Could not write dracut nvidia config"
+		mkdir_or_die 0755 /etc/modprobe.d
+		printf 'blacklist nouveau\noptions nouveau modeset=0\n' > /etc/modprobe.d/blacklist-nouveau.conf \
+			|| die "Could not write nouveau blacklist"
+	fi
+}
+
+# True if the resolved video card set uses NVIDIA's proprietary driver.
+function uses_nvidia_driver() {
+	[[ " $(resolve_video_cards) " == *" nvidia "* ]]
+}
+
+# NVIDIA proprietary driver with open kernel modules (needed for RTX 50 / Blackwell, works on
+# RTX 20 and newer). Runs after the kernel is installed. If the module cannot be built, the
+# installation falls back to nouveau so the system still gets a working desktop.
+function install_nvidia_driver() {
+	uses_nvidia_driver || return 0
+	einfo "Installing the NVIDIA proprietary driver (open kernel modules)"
+	mkdir_or_die 0755 /etc/portage/package.use /etc/portage/package.accept_keywords
+	echo "x11-drivers/nvidia-drivers kernel-open" > /etc/portage/package.use/gentoo-install-nvidia \
+		|| die "Could not write package.use"
+	# package.license is a plain file here (the firmware step appends to it).
+	echo "x11-drivers/nvidia-drivers NVIDIA-r2" >> /etc/portage/package.license \
+		|| die "Could not write package.license"
+	# A driver new enough for current GPUs is often only in the testing branch.
+	echo "x11-drivers/nvidia-drivers ~amd64" > /etc/portage/package.accept_keywords/gentoo-install-nvidia \
+		|| die "Could not write package.accept_keywords"
+
+	if emerge_auto --oneshot -- x11-drivers/nvidia-drivers; then
+		mkdir_or_die 0755 /etc/modprobe.d
+		echo "options nvidia-drm modeset=1 fbdev=1" > /etc/modprobe.d/gentoo-install-nvidia.conf \
+			|| die "Could not write nvidia modprobe config"
+	else
+		ewarn "Could not build the NVIDIA driver for this kernel; falling back to the open source nouveau driver."
+		sed -i 's/^VIDEO_CARDS="nvidia"/VIDEO_CARDS="nouveau"/' /etc/portage/make.conf
+		rm -f /etc/dracut.conf.d/20-gentoo-install-nvidia.conf /etc/modprobe.d/blacklist-nouveau.conf \
+			/etc/portage/package.use/gentoo-install-nvidia /etc/portage/package.accept_keywords/gentoo-install-nvidia
+		VIDEO_CARDS="nouveau"
+	fi
 }
 
 function generate_syslinux_cfg() {
@@ -547,6 +602,8 @@ function install_kernel() {
 
 	einfo "Installing the gentoo distribution kernel (binary)"
 	try emerge_auto sys-kernel/gentoo-kernel-bin
+
+	install_nvidia_driver
 
 	if [[ $USED_ZFS == "true" ]]; then
 		einfo "Installing zfs"

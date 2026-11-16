@@ -2245,7 +2245,7 @@ function TERMINAL_menu()  {
 function VIDEO_CARDS_tag()   { echo " └ Graphics drivers"; }
 function VIDEO_CARDS_label() { echo " └ ($VIDEO_CARDS)"; }
 function VIDEO_CARDS_show()  { [[ $DESKTOP != "none" ]]; }
-function VIDEO_CARDS_help()  { echo "Sets VIDEO_CARDS in make.conf. 'auto' detects the GPU(s) of this machine when installing (AMD, Intel, Nouveau for NVIDIA, VMware, virtio). Proprietary NVIDIA drivers are not installed automatically; use nouveau now and switch later."; }
+function VIDEO_CARDS_help()  { echo "Sets VIDEO_CARDS in make.conf. 'auto' detects the GPU(s) of this machine when installing (AMD, Intel, Nouveau for NVIDIA, VMware, virtio). GeForce RTX 50 series cards are detected and get NVIDIA's proprietary driver with open kernel modules ('nvidia'); this works on RTX 20 series and newer and builds a kernel module, falling back to nouveau if that fails. Older NVIDIA cards (GTX 10 series and earlier) should use 'nouveau'."; }
 function VIDEO_CARDS_menu()  {
 	if menu_radiolist_labeled \
 		"Graphics drivers" \
@@ -2254,7 +2254,8 @@ function VIDEO_CARDS_menu()  {
 		"auto"     "Detect automatically (recommended)" \
 		"amd"      "AMD (amdgpu, radeonsi)" \
 		"intel"    "Intel" \
-		"nouveau"  "NVIDIA (open source nouveau)" \
+		"nvidia"   "NVIDIA proprietary, RTX 20+ / RTX 50 (open kernel modules)" \
+		"nouveau"  "NVIDIA (open source nouveau, older cards)" \
 		"virgl"    "Virtual machine (virtio / QEMU)" \
 		"qxl"      "Virtual machine (QXL / SPICE, e.g. GNOME Boxes)" \
 		"vmware"   "Virtual machine (VMware)" \
