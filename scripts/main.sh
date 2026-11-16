@@ -133,15 +133,36 @@ function etc_update_auto() {
 # compile errors) still end up in the interactive try prompt.
 function emerge_auto() {
 	local opts=(--verbose --autounmask=y --autounmask-write=y --autounmask-continue=y)
-	emerge "${opts[@]}" "$@"
-	local rc=$?
+	# Always pass the binary-package options explicitly: the EMERGE_DEFAULT_OPTS environment
+	# variable (set by dispatch_chroot.sh) overrides the one in make.conf.
+	if [[ $USE_BINHOST == "true" && ${BINHOST_BROKEN:-false} != "true" ]]; then
+		opts+=(--getbinpkg --binpkg-respect-use=y)
+	fi
+	local log rc
+	log="$(mktemp)" || die "Could not create a temporary file"
+
+	emerge "${opts[@]}" "$@" 2>&1 | tee "$log"
+	rc="${PIPESTATUS[0]}"
 	etc_update_auto
-	if [[ $rc != 0 ]]; then
+
+	# A broken signature setup must not leave the installation unusable: fall back to
+	# building from source for the rest of the installation.
+	if [[ $rc != 0 && ${BINHOST_BROKEN:-false} != "true" ]] && grep -q "GnuPG verification failed" "$log"; then
+		ewarn "Binary package signature verification failed. Building from source instead (slower)."
+		BINHOST_BROKEN=true
+		sed -i -e '/^EMERGE_DEFAULT_OPTS=.*getbinpkg/d' -e 's/^FEATURES="getbinpkg binpkg-request-signature"$/FEATURES=""/' /etc/portage/make.conf \
+			|| ewarn "Could not disable the binary package host in make.conf"
+		opts=(--verbose --autounmask=y --autounmask-write=y --autounmask-continue=y)
+		emerge "${opts[@]}" "$@" 2>&1 | tee "$log"
+		rc="${PIPESTATUS[0]}"
+		etc_update_auto
+	elif [[ $rc != 0 ]]; then
 		ewarn "emerge stopped; retrying once after applying portage's suggested configuration changes"
-		emerge "${opts[@]}" "$@"
-		rc=$?
+		emerge "${opts[@]}" "$@" 2>&1 | tee "$log"
+		rc="${PIPESTATUS[0]}"
 		etc_update_auto
 	fi
+	rm -f "$log"
 	return "$rc"
 }
 

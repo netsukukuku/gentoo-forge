@@ -975,7 +975,7 @@ function gentoo_umount() {
 
 function init_bash() {
 	source /etc/profile
-	umask 0077
+	umask 0022
 	export PS1='(chroot) \[[0;31m\]\u\[[1;31m\]@\h \[[1;34m\]\w \[[m\]\$ \[[m\]'
 }; export -f init_bash
 
@@ -984,7 +984,7 @@ function env_update() {
 		|| die "Error in env-update"
 	source /etc/profile \
 		|| die "Could not source /etc/profile"
-	umask 0077
+	umask 0022
 }
 
 function mkdir_or_die() {

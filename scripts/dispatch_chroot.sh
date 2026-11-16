@@ -8,8 +8,10 @@ set -uo pipefail
 # Source the systems profile
 source /etc/profile
 
-# Set safe umask
-umask 0077
+# Portage and the tools it spawns drop privileges (portage user) and must be able to read what
+# root creates (e.g. /etc/portage/gnupg, /var/db/repos). A restrictive umask breaks binary package
+# signature verification and syncing, so use the normal system umask. Secrets are chmod'ed explicitly.
+umask 0022
 
 # Export variables (used to determine processor count by some applications)
 export NPROC="$(nproc || echo 2)"
