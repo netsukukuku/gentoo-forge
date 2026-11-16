@@ -242,6 +242,13 @@ DESKTOP="none"
 # Login screen: auto | sddm | gdm | lightdm | cosmic-greeter (cosmic-greeter needs DESKTOP="cosmic").
 # "auto" = SDDM for plasma, GDM for gnome, LightDM for xfce, cosmic-greeter for cosmic.
 DISPLAY_MANAGER="auto"
+# Web browser: none | firefox-bin | firefox | librewolf | zen | waterfox | mullvad
+# (all Firefox-based; librewolf comes from its own overlay, zen/waterfox/mullvad from the GURU
+# overlay. If an overlay browser cannot be set up, firefox-bin is installed instead.)
+BROWSER="firefox-bin"
+# Terminal emulator: default | none | kitty | foot | alacritty | wezterm | ghostty
+# "default" = Konsole / GNOME Terminal / Xfce Terminal / COSMIC Terminal. foot is Wayland-only.
+TERMINAL="default"
 # Graphics drivers (VIDEO_CARDS in make.conf). "auto" detects your GPU(s).
 # Other values: amd, intel, nouveau, virgl (virtio), qxl (GNOME Boxes/SPICE), vmware, fbdev, or any VIDEO_CARDS string.
 VIDEO_CARDS="auto"

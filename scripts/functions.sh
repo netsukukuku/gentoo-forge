@@ -57,6 +57,8 @@ function apply_config_defaults() {
 	: "${USER_SUDO:=true}"
 	: "${DESKTOP:=none}"
 	: "${DISPLAY_MANAGER:=auto}"
+	: "${BROWSER:=firefox-bin}"
+	: "${TERMINAL:=default}"
 	: "${BOOTLOADER:=systemd-boot}"
 	: "${VIDEO_CARDS:=auto}"
 	: "${USE_BINHOST:=true}"
@@ -83,6 +85,10 @@ function check_config() {
 		[[ $STAGE3_VARIANT == "systemd" || $STAGE3_VARIANT == "openrc" ]] \
 			|| die "Desktop environments are only supported with the plain 'systemd' or 'openrc' stage3 variants."
 	fi
+	[[ $BROWSER =~ ^(none|firefox-bin|firefox|librewolf|zen|waterfox|mullvad)$ ]] \
+		|| die "BROWSER must be one of: none, firefox-bin, firefox, librewolf, zen, waterfox, mullvad"
+	[[ $TERMINAL =~ ^(default|none|kitty|foot|alacritty|wezterm|ghostty)$ ]] \
+		|| die "TERMINAL must be one of: default, none, kitty, foot, alacritty, wezterm, ghostty"
 	[[ $BOOTLOADER =~ ^(systemd-boot|grub)$ ]] \
 		|| die "BOOTLOADER must be one of: systemd-boot, grub"
 	[[ $DISPLAY_MANAGER =~ ^(auto|sddm|gdm|lightdm|cosmic-greeter)$ ]] \

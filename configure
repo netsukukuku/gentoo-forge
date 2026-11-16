@@ -403,6 +403,8 @@ function load_default_config() {
 	BOOTLOADER="systemd-boot"
 	DESKTOP="none"
 	DISPLAY_MANAGER="auto"
+	BROWSER="firefox-bin"
+	TERMINAL="default"
 	VIDEO_CARDS="auto"
 
 	function disk_configuration() {
@@ -886,6 +888,8 @@ MENU_ITEMS=(
 	"--------"
 	"DESKTOP"
 	"DISPLAY_MANAGER"
+	"BROWSER"
+	"TERMINAL"
 	"VIDEO_CARDS"
 	"--------"
 	"NETWORK_BACKEND"
@@ -1541,6 +1545,68 @@ function DISPLAY_MANAGER_menu()  {
 	fi
 }
 
+function browser_name() {
+	case "$BROWSER" in
+		none)        echo "none" ;;
+		firefox-bin) echo "Firefox (official binary)" ;;
+		firefox)     echo "Firefox (Gentoo build)" ;;
+		librewolf)   echo "LibreWolf" ;;
+		zen)         echo "Zen Browser" ;;
+		waterfox)    echo "Waterfox" ;;
+		mullvad)     echo "Mullvad Browser" ;;
+	esac
+}
+function BROWSER_tag()   { echo " ├ Web browser"; }
+function BROWSER_label() { echo " ├ ($(browser_name))"; }
+function BROWSER_show()  { [[ $DESKTOP != "none" ]]; }
+function BROWSER_help()  { echo "The web browser that is installed with the desktop. All options are Firefox or Firefox-based; none are Chromium/Google based. 'Firefox (official binary)' is the fast default. 'Firefox (Gentoo build)' uses the binary package host if it has it, otherwise compiles for hours. LibreWolf comes from its own overlay; Zen, Waterfox and Mullvad Browser come from the community GURU overlay (prebuilt binaries). If an overlay browser cannot be set up, Firefox (official binary) is installed instead."; }
+function BROWSER_menu()  {
+	if menu_radiolist_labeled \
+		"Web browser" \
+		"Select the web browser to install." \
+		"$BROWSER" \
+		"firefox-bin" "Firefox (official binary) - fast, recommended" \
+		"firefox"     "Firefox (Gentoo build) - may compile for hours" \
+		"librewolf"   "LibreWolf - hardened, privacy-focused Firefox (overlay)" \
+		"zen"         "Zen Browser - modern Firefox fork (GURU overlay)" \
+		"waterfox"    "Waterfox - Firefox fork (GURU overlay)" \
+		"mullvad"     "Mullvad Browser - anti-fingerprinting (GURU overlay)" \
+		"none"        "None"
+	then
+		BROWSER="$dialog_out"
+		UNSAVED_CHANGES=true
+	fi
+}
+
+function terminal_name() {
+	case "$TERMINAL" in
+		default)   echo "desktop default" ;;
+		none)      echo "none" ;;
+		*)         echo "$TERMINAL" ;;
+	esac
+}
+function TERMINAL_tag()   { echo " ├ Terminal emulator"; }
+function TERMINAL_label() { echo " ├ ($(terminal_name))"; }
+function TERMINAL_show()  { [[ $DESKTOP != "none" ]]; }
+function TERMINAL_help()  { echo "The terminal emulator installed with the desktop. 'desktop default' is Konsole (Plasma), GNOME Terminal (GNOME), Xfce Terminal (Xfce) or COSMIC Terminal. kitty, alacritty, wezterm and ghostty are GPU-accelerated and may compile from source (Rust) if the binary host lacks them; foot is a very light Wayland-only terminal (needs a Wayland session such as Plasma, GNOME or COSMIC, not Xfce/X11)."; }
+function TERMINAL_menu()  {
+	if menu_radiolist_labeled \
+		"Terminal emulator" \
+		"Select the terminal emulator to install." \
+		"$TERMINAL" \
+		"default"   "Desktop default (Konsole / GNOME Terminal / Xfce / COSMIC)" \
+		"kitty"     "kitty - fast GPU terminal" \
+		"foot"      "foot - light, fast (Wayland only)" \
+		"alacritty" "Alacritty - minimal GPU terminal" \
+		"wezterm"   "WezTerm - GPU terminal + multiplexer" \
+		"ghostty"   "Ghostty - fast, native-feeling terminal" \
+		"none"      "None"
+	then
+		TERMINAL="$dialog_out"
+		UNSAVED_CHANGES=true
+	fi
+}
+
 function VIDEO_CARDS_tag()   { echo " └ Graphics drivers"; }
 function VIDEO_CARDS_label() { echo " └ ($VIDEO_CARDS)"; }
 function VIDEO_CARDS_show()  { [[ $DESKTOP != "none" ]]; }
@@ -1889,6 +1955,8 @@ USER_SUDO=${USER_SUDO@Q}
 BOOTLOADER=${BOOTLOADER@Q}
 DESKTOP=${DESKTOP@Q}
 DISPLAY_MANAGER=${DISPLAY_MANAGER@Q}
+BROWSER=${BROWSER@Q}
+TERMINAL=${TERMINAL@Q}
 VIDEO_CARDS=${VIDEO_CARDS@Q}
 
 

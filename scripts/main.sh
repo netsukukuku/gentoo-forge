@@ -131,37 +131,78 @@ function etc_update_auto() {
 # upgrades work too), merged, and the merge continues. A second attempt follows if the first one
 # stopped, because merging the changes can unlock further steps. Real failures (blockers,
 # compile errors) still end up in the interactive try prompt.
+# Portage reports dependency cycles together with the USE changes that break them, e.g.
+#   - dev-python/pillow-13.0.0 (Change USE: -truetype)
+# Apply those temporarily (package.use/zz-circular-breaker); restore_circular_breaks undoes
+# them at the end of the installation and rebuilds the affected packages normally.
+CIRCULAR_BREAK_FILE="/etc/portage/package.use/zz-circular-breaker"
+CIRCULAR_BREAK_ATOMS=()
+function break_circular_deps() {
+	local log="$1" line atom flags added=1
+	local re='^-[[:space:]]+([^[:space:]]+)-[0-9][^[:space:]]*[[:space:]]+\(Change USE:[[:space:]]*([^)]+)\)'
+	touch "$CIRCULAR_BREAK_FILE" || return 1
+	while IFS= read -r line; do
+		[[ $line =~ $re ]] || continue
+		atom="${BASH_REMATCH[1]}"
+		flags="${BASH_REMATCH[2]}"
+		grep -qxF "$atom $flags" "$CIRCULAR_BREAK_FILE" && continue
+		echo "$atom $flags" >> "$CIRCULAR_BREAK_FILE" || return 1
+		CIRCULAR_BREAK_ATOMS+=("$atom")
+		ewarn "Breaking a circular dependency: $atom $flags (restored after the installation)"
+		added=0
+	done < <(sed 's/\x1b\[[0-9;]*m//g' "$log")
+	return "$added"
+}
+
+function restore_circular_breaks() {
+	[[ ${#CIRCULAR_BREAK_ATOMS[@]} -gt 0 ]] || return 0
+	einfo "Restoring the USE flags that were disabled to break dependency cycles"
+	rm -f "$CIRCULAR_BREAK_FILE"
+	emerge_auto --oneshot --newuse -- "${CIRCULAR_BREAK_ATOMS[@]}" \
+		|| ewarn "Could not rebuild ${CIRCULAR_BREAK_ATOMS[*]} with its normal USE flags; run 'emerge --update --newuse @world' after booting."
+	CIRCULAR_BREAK_ATOMS=()
+}
+
+# emerge with automatic handling of the usual failures:
+#  - needs a USE flag / keyword / license: portage computes the changes, they are written to
+#    /etc/portage (permanent, so later upgrades work too), merged, and the merge continues;
+#  - circular dependencies: the USE changes portage suggests are applied temporarily;
+#  - broken binary package signatures: falls back to building from source.
+# Anything else (blockers, compile errors) ends in the interactive try prompt.
 function emerge_auto() {
-	local opts=(--verbose --autounmask=y --autounmask-write=y --autounmask-continue=y)
-	# Always pass the binary-package options explicitly: the EMERGE_DEFAULT_OPTS environment
-	# variable (set by dispatch_chroot.sh) overrides the one in make.conf.
-	if [[ $USE_BINHOST == "true" && ${BINHOST_BROKEN:-false} != "true" ]]; then
-		opts+=(--getbinpkg --binpkg-respect-use=y)
-	fi
-	local log rc
+	local log rc attempt generic_retry=false
 	log="$(mktemp)" || die "Could not create a temporary file"
 
-	emerge "${opts[@]}" "$@" 2>&1 | tee "$log"
-	rc="${PIPESTATUS[0]}"
-	etc_update_auto
+	for attempt in 1 2 3 4 5 6; do
+		local opts=(--verbose --autounmask=y --autounmask-write=y --autounmask-continue=y)
+		# Always pass the binary-package options explicitly: the EMERGE_DEFAULT_OPTS environment
+		# variable (set by dispatch_chroot.sh) overrides the one in make.conf.
+		if [[ $USE_BINHOST == "true" && ${BINHOST_BROKEN:-false} != "true" ]]; then
+			opts+=(--getbinpkg --binpkg-respect-use=y)
+		fi
 
-	# A broken signature setup must not leave the installation unusable: fall back to
-	# building from source for the rest of the installation.
-	if [[ $rc != 0 && ${BINHOST_BROKEN:-false} != "true" ]] && grep -q "GnuPG verification failed" "$log"; then
-		ewarn "Binary package signature verification failed. Building from source instead (slower)."
-		BINHOST_BROKEN=true
-		sed -i -e '/^EMERGE_DEFAULT_OPTS=.*getbinpkg/d' -e 's/^FEATURES="getbinpkg binpkg-request-signature"$/FEATURES=""/' /etc/portage/make.conf \
-			|| ewarn "Could not disable the binary package host in make.conf"
-		opts=(--verbose --autounmask=y --autounmask-write=y --autounmask-continue=y)
 		emerge "${opts[@]}" "$@" 2>&1 | tee "$log"
 		rc="${PIPESTATUS[0]}"
 		etc_update_auto
-	elif [[ $rc != 0 ]]; then
-		ewarn "emerge stopped; retrying once after applying portage's suggested configuration changes"
-		emerge "${opts[@]}" "$@" 2>&1 | tee "$log"
-		rc="${PIPESTATUS[0]}"
-		etc_update_auto
-	fi
+		[[ $rc == 0 ]] && break
+
+		if [[ ${BINHOST_BROKEN:-false} != "true" ]] && grep -q "GnuPG verification failed" "$log"; then
+			ewarn "Binary package signature verification failed. Building from source instead (slower)."
+			BINHOST_BROKEN=true
+			sed -i -e '/^EMERGE_DEFAULT_OPTS=.*getbinpkg/d' -e 's/^FEATURES="getbinpkg binpkg-request-signature"$/FEATURES=""/' /etc/portage/make.conf \
+				|| ewarn "Could not disable the binary package host in make.conf"
+			continue
+		fi
+		if grep -q "circular dependencies" "$log" && break_circular_deps "$log"; then
+			continue
+		fi
+		if [[ $generic_retry == "false" ]]; then
+			generic_retry=true
+			ewarn "emerge stopped; retrying once after applying portage's suggested configuration changes"
+			continue
+		fi
+		break
+	done
 	rm -f "$log"
 	return "$rc"
 }
@@ -711,6 +752,42 @@ function setup_cosmic_overlay() {
 		|| die "cosmic-meta is not in the cosmic-overlay (layout changed?). Choose another desktop."
 }
 
+# Enables a third-party repository (idempotent). $1: name, $2: optional git url if it is not
+# in the eselect-repository list.
+function enable_overlay() {
+	local name="$1" url="${2:-}"
+	if [[ ! -x /usr/bin/eselect-repository && ! -e /usr/share/eselect/modules/repository.eselect ]]; then
+		try emerge_auto --oneshot app-eselect/eselect-repository
+	fi
+	if [[ ! -d /var/db/repos/$name ]]; then
+		eselect repository enable "$name" \
+			|| { [[ -n $url ]] && eselect repository add "$name" git "$url"; } \
+			|| return 1
+		emaint sync -r "$name" || return 1
+	fi
+}
+
+# Browsers that are not in the main tree come from overlays. If anything about that fails,
+# fall back to firefox-bin so the system always ends up with a browser.
+function install_overlay_browser() {
+	local overlay="" url="" atom=""
+	case "$BROWSER" in
+		librewolf) overlay="librewolf"; url="https://codeberg.org/librewolf/gentoo.git"; atom="www-client/librewolf" ;;
+		zen)       overlay="guru"; atom="www-client/zen-bin" ;;
+		waterfox)  overlay="guru"; atom="www-client/waterfox-bin" ;;
+		mullvad)   overlay="guru"; atom="www-client/mullvad-browser-bin" ;;
+		*) return 0 ;;
+	esac
+
+	einfo "Installing the '$BROWSER' browser from the '$overlay' repository"
+	if enable_overlay "$overlay" "$url" && [[ -d /var/db/repos/$overlay/$atom ]]; then
+		try emerge_auto -- "$atom"
+	else
+		ewarn "Could not set up '$BROWSER' ($atom in the '$overlay' repository); installing firefox-bin instead."
+		try emerge_auto -- www-client/firefox-bin
+	fi
+}
+
 function configure_greetd_cosmic() {
 	einfo "Configuring greetd with cosmic-greeter"
 	mkdir_or_die 0755 /etc/greetd
@@ -742,16 +819,17 @@ function install_desktop() {
 		media-video/wireplumber
 		media-fonts/dejavu
 		media-fonts/liberation-fonts
-		www-client/firefox-bin
 	)
 	case "$DESKTOP" in
 		plasma)
 			[[ $dm == "auto" ]] && dm="sddm"
-			pkgs+=(kde-plasma/plasma-meta kde-apps/konsole kde-apps/dolphin)
+			pkgs+=(kde-plasma/plasma-meta kde-apps/dolphin)
+			[[ $TERMINAL == "default" ]] && pkgs+=(kde-apps/konsole)
 			;;
 		gnome)
 			[[ $dm == "auto" ]] && dm="gdm"
-			pkgs+=(gnome-base/gnome-light x11-terms/gnome-terminal)
+			pkgs+=(gnome-base/gnome-light)
+			[[ $TERMINAL == "default" ]] && pkgs+=(x11-terms/gnome-terminal)
 			;;
 		xfce)
 			[[ $dm == "auto" ]] && dm="lightdm"
@@ -760,6 +838,18 @@ function install_desktop() {
 		cosmic)
 			[[ $dm == "auto" ]] && dm="cosmic-greeter"
 			;;
+	esac
+	# Browser and terminal chosen in the configuration. Xfce and COSMIC bring their own terminal.
+	case "$TERMINAL" in
+		kitty)     pkgs+=(x11-terms/kitty) ;;
+		foot)      pkgs+=(gui-apps/foot) ;;
+		alacritty) pkgs+=(x11-terms/alacritty) ;;
+		wezterm)   pkgs+=(x11-terms/wezterm) ;;
+		ghostty)   pkgs+=(x11-terms/ghostty) ;;
+	esac
+	case "$BROWSER" in
+		firefox-bin) pkgs+=(www-client/firefox-bin) ;;
+		firefox)     pkgs+=(www-client/firefox) ;;
 	esac
 	local overlay_pkgs=()
 	case "$dm" in
@@ -778,6 +868,8 @@ function install_desktop() {
 	local available
 	readarray -t available < <(existing_atoms "${pkgs[@]}")
 	try emerge_auto -- "${available[@]}"
+
+	install_overlay_browser
 
 	if [[ $DESKTOP == "cosmic" ]]; then
 		setup_cosmic_overlay
@@ -906,6 +998,8 @@ EOF
 		einfo "Installing additional packages"
 		try emerge_auto -- "${ADDITIONAL_PACKAGES[@]}"
 	fi
+
+	restore_circular_breaks
 
 	# If configured, change to gentoo testing at the very end, so the installation
 	# above only used the stable tree. You can deal with the blockers afterwards.

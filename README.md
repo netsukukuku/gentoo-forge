@@ -14,7 +14,7 @@ LUKS and mdraid.
   set, locked (sudo only) or asked for during install. Passwords are stored as salted SHA-512 hashes.
 - **No SSH.** No sshd, no authorized keys, no initramfs sshd.
 - **Bootloader**: systemd-boot or GRUB (EFI); syslinux for BIOS.
-- **Desktop + login screen**: KDE Plasma, GNOME, Xfce or COSMIC (experimental, community overlay), with a choice of SDDM, GDM, LightDM or cosmic-greeter, PipeWire and Firefox. Selects the matching
+- **Desktop + login screen**: KDE Plasma, GNOME, Xfce or COSMIC (experimental, community overlay), with a choice of SDDM, GDM, LightDM or cosmic-greeter, PipeWire, and your choice of browser (Firefox, LibreWolf, Zen, Waterfox, Mullvad) and terminal (kitty, foot, Alacritty, WezTerm, Ghostty or the desktop's own). Selects the matching
   gentoo desktop profile via `eselect profile` and updates `@world`, as the handbook does.
 - **Network**: iwd (`iwctl`, Wi-Fi + ethernet), NetworkManager, or wired-only (DHCP/static).
   Wi-Fi networks you joined with `iwctl` in the live ISO can be copied to the new system.
@@ -22,6 +22,7 @@ LUKS and mdraid.
   so *kernel upgrades stay bootable automatically* (no manual initramfs/kernel copying).
   The ESP is mounted at `/boot` (1 GiB), which also works with an encrypted root.
 - **USE-flag/keyword problems are handled automatically**: portage's autounmask writes the needed changes to `/etc/portage`, they are merged with `etc-update`, and the emerge is retried. Real failures (blockers, compile errors) drop into a shell/retry prompt.
+- **Dependency cycles are handled too**: portage's suggested temporary USE changes (e.g. `pillow -truetype`) are applied automatically and reverted at the end of the install.
 - **Sane portage defaults**: stable branch (not `~arch`), `MAKEOPTS` from cores/RAM, `VIDEO_CARDS`
   auto-detected, optional official **binary package host** (signature-checked) for fast installs.
 - **Bug fixes** (partition numbers >= 10, `-c` config option, DNS symlink for systemd-resolved, unchecked downloads, ...).
