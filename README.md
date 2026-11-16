@@ -1,7 +1,7 @@
 ## Gentoo installer (fork of oddlama/gentoo-install)
 
 A guided installer for a **real, handbook-style Gentoo system**: pick options in a Gentoo-themed
-menu, press *Save and install*, and get a bootable machine with users, networking and (optionally)
+menu, press *Review and install*, and get a bootable machine with users, networking and (optionally)
 a desktop. Works with systemd or OpenRC, EFI (recommended) or legacy BIOS, ext4/btrfs/ZFS,
 LUKS and mdraid.
 
@@ -25,6 +25,8 @@ LUKS and mdraid.
 - **Dependency cycles are handled too**: portage's suggested temporary USE changes (e.g. `pillow -truetype`) are applied automatically and reverted at the end of the install.
 - **Sane portage defaults**: stable branch (not `~arch`), `MAKEOPTS` from cores/RAM, `VIDEO_CARDS`
   auto-detected, optional official **binary package host** (signature-checked) for fast installs.
+- **Better partitioning**: the default layout is sized for the machine (swap from RAM) with a 1 GiB boot partition and a btrfs root split into `home`, `snapshots`, `log` and `cache` subvolumes (one passphrase if encrypted). A **custom partitioning editor** lets you add, resize, reorder and delete partitions with ext4/btrfs/swap and per-mountpoint control, with a live preview of the resulting table.
+- **Reworked menu**: sections, a live status line, a layout preview and a final review screen before anything is written.
 - **Bug fixes** (partition numbers >= 10, `-c` config option, DNS symlink for systemd-resolved, unchecked downloads, ...).
 
 ### Usage
@@ -32,7 +34,7 @@ LUKS and mdraid.
 1. Boot a live environment (an [Arch Linux](https://archlinux.org/download/) ISO is recommended; it ships `iwctl` for Wi-Fi, and `./configure` offers to install `dialog` if missing).
    Connect to the network (`iwctl` for Wi-Fi).
 2. Get this directory onto the live system (`git clone` or unzip) and `cd` into it.
-3. Run `./configure` as root. Go through the menu, then choose **>> Save and install**.
+3. Run `./configure` as root. Go through the menu, then choose **>> Review and install**.
    (Or edit `gentoo.conf` by hand, starting from `gentoo.conf.example`, and run `./install`.)
 4. Review the partitioning plan. **The selected disk will be erased.** Confirm, wait, reboot.
 

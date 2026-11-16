@@ -25,7 +25,7 @@ function format_zfs_custom() {
 }
 
 function disk_configuration() {
-	create_classic_single_disk_layout swap=8GiB type=efi luks=true root_fs=ext4 /dev/sdX
+	create_classic_single_disk_layout swap=auto type=efi luks=false root_fs=btrfs subvolumes=true /dev/sdX
 
 	# 1. create_classic_single_disk_layout
 	#
@@ -35,11 +35,32 @@ function disk_configuration() {
 	#
 	# Parameters:
 	#   swap=<size>           Create a swap partition with given size, or no swap
-	#                         at all if set to false
+	#                         at all if set to false. "auto" sizes it from the RAM of the
+	#                         installing machine (<=2GiB RAM: 2x, <=8GiB: 1x, more: 8GiB).
 	#   type=[efi|bios]       Selects the boot type. Defaults to efi if not given.
 	#   luks=[true|false]     Encrypt root partition. Defaults to false if not given.
 	#   root_fs=[ext4|btrfs]  Root filesystem
-	#create_classic_single_disk_layout swap=8GiB type=efi luks=true root_fs=ext4 /dev/sdX
+	#   subvolumes=[true|false]  (btrfs only) Create the subvolumes home, snapshots, log and
+	#                         cache next to the root subvolume and mount them at /home,
+	#                         /.snapshots, /var/log and /var/cache. With luks=true everything
+	#                         is covered by one passphrase. Defaults to false if not given.
+	#create_classic_single_disk_layout swap=auto type=efi luks=false root_fs=btrfs subvolumes=true /dev/sdX
+
+	# 1b. create_manual_layout
+	#
+	# A single disk with a freely defined partition list. The boot partition (efi or bios)
+	# is always created first, followed by the partitions of the parts= list.
+	#
+	# Parameters:
+	#   parts=<list>          Semicolon separated partitions "<size>:<mountpoint>:<fs>[:luks]"
+	#                           size:       512MiB, 8GiB, ... or "remaining" (last partition only)
+	#                           mountpoint: "swap", "/" (required, exactly once) or any other
+	#                                       absolute path such as /home or /var (not /boot)
+	#                           fs:         ext4 | btrfs | swap (swap only for "swap")
+	#                           luks:       encrypt the partition (root "/" only)
+	#   type=[efi|bios]       Selects the boot type. Defaults to efi if not given.
+	#   boot_size=<size>      Size of the boot partition. Defaults to 1GiB.
+	#create_manual_layout type=efi parts='8GiB:swap:swap;50GiB:/:ext4:luks;remaining:/home:ext4' /dev/sdX
 
 	# 2. create_zfs_centric_layout
 	#

@@ -26,7 +26,7 @@ item_color = (BLACK,WHITE,OFF)
 item_selected_color = (WHITE,MAGENTA,ON)
 tag_color = (MAGENTA,WHITE,OFF)
 tag_selected_color = (WHITE,MAGENTA,ON)
-tag_key_color = (RED,WHITE,OFF)
+tag_key_color = (MAGENTA,WHITE,OFF)
 tag_key_selected_color = (WHITE,MAGENTA,ON)
 
 check_color = (BLACK,WHITE,OFF)

@@ -449,9 +449,11 @@ function disk_create_dummy() {
 	fi
 }
 
+# $3: optional "<name>:<mountpoint>;..." list of additional subvolumes to create
 function init_btrfs() {
 	local device="$1"
 	local desc="$2"
+	local subvolumes="${3:-}"
 	mkdir -p /btrfs \
 		|| die "Could not create /btrfs directory"
 	mount "$device" /btrfs \
@@ -460,6 +462,11 @@ function init_btrfs() {
 		|| die "Could not create btrfs subvolume /root on $desc"
 	btrfs subvolume set-default /btrfs/root \
 		|| die "Could not set default btrfs subvolume to /root on $desc"
+	local sv
+	for sv in ${subvolumes//;/ }; do
+		btrfs subvolume create "/btrfs/${sv%%:*}" \
+			|| die "Could not create btrfs subvolume /${sv%%:*} on $desc"
+	done
 	umount /btrfs \
 		|| die "Could not unmount btrfs on $desc"
 }
@@ -521,7 +528,7 @@ function disk_format() {
 					|| die "Could not format device '$device' ($id)"
 			fi
 
-			init_btrfs "$device" "'$device' ($id)"
+			init_btrfs "$device" "'$device' ($id)" "${arguments[subvolumes]:-}"
 			;;
 		*) die "Unknown filesystem type" ;;
 	esac
@@ -860,6 +867,45 @@ function mount_by_id() {
 		|| die "Could not resolve device with id=$id"
 	mount "$dev" "$mountpoint" \
 		|| die "Could not mount device '$dev'"
+}
+
+# Mounts the additional filesystems (separate /home partition, btrfs subvolumes, ...) below the
+# root. Must run after the stage3 was extracted. Anything the stage3 already placed in a
+# mountpoint is copied into the new filesystem first, so nothing is hidden.
+function mount_extra_mounts() {
+	[[ ${#DISK_EXTRA_MOUNTS[@]} -gt 0 ]] || return 0
+
+	local sorted entry depth id mp fs opts dev target tmp
+	# Parents first: sort by the number of path components.
+	sorted="$(for entry in "${DISK_EXTRA_MOUNTS[@]}"; do
+		mp="$(cut -d'|' -f2 <<< "$entry")"
+		echo "$(tr -cd '/' <<< "$mp" | wc -c)|$entry"
+	done | sort -t'|' -k1,1n -s)" \
+		|| die "Could not sort the additional mounts"
+
+	while IFS='|' read -r depth id mp fs opts; do
+		[[ -n $id ]] || continue
+		target="$ROOT_MOUNTPOINT$mp"
+		mountpoint -q -- "$target" && continue
+		dev="$(resolve_device_by_id "$id")" \
+			|| die "Could not resolve device with id=$id"
+		install -d -m 0755 "$target" \
+			|| die "Could not create mountpoint directory '$target'"
+		einfo "Mounting $mp ($fs, $id)"
+		if [[ -n "$(ls -A "$target" 2>/dev/null)" ]]; then
+			tmp="$(mktemp -d "$TMP_DIR/extra-mount-XXXXXX")" \
+				|| die "Could not create a temporary directory"
+			mount -t "$fs" -o "$opts" "$dev" "$tmp" \
+				|| die "Could not mount '$dev' for '$mp'"
+			cp -a "$target/." "$tmp/" \
+				|| die "Could not copy the existing contents of '$mp'"
+			umount "$tmp" \
+				|| die "Could not unmount '$tmp'"
+			rmdir "$tmp"
+		fi
+		mount -t "$fs" -o "$opts" "$dev" "$target" \
+			|| die "Could not mount '$dev' to '$target'"
+	done <<< "$sorted"
 }
 
 function mount_root() {

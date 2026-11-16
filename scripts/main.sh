@@ -10,6 +10,7 @@ function install_stage3() {
 	apply_disk_configuration
 	download_stage3
 	extract_stage3
+	mount_extra_mounts
 }
 
 function configure_base_system() {
@@ -596,6 +597,11 @@ function generate_fstab() {
 	if [[ -v "DISK_ID_SWAP" ]]; then
 		add_fstab_entry "UUID=$(get_blkid_uuid_for_id "$DISK_ID_SWAP")" "none" "swap" "defaults,discard" "0 0"
 	fi
+	local entry id mp fs opts
+	for entry in "${DISK_EXTRA_MOUNTS[@]}"; do
+		IFS='|' read -r id mp fs opts <<< "$entry"
+		add_fstab_entry "UUID=$(get_blkid_uuid_for_id "$id")" "$mp" "$fs" "$opts" "0 2"
+	done
 }
 
 # Sets the password of $1 from $2 (a crypt hash), or asks interactively if no hash is given.

@@ -32,6 +32,9 @@ NO_PARTITIONING_OR_FORMATTING=false
 
 # An array of disk related actions to perform
 DISK_ACTIONS=()
+# Additional filesystems to mount below / (fstab + mounted during installation).
+# Entries: "<disk id>|<mountpoint>|<fstype>|<mount options>"
+DISK_EXTRA_MOUNTS=()
 # An array of dracut parameters needed to boot the selected configuration
 DISK_DRACUT_CMDLINE=()
 # An associative array from disk id to a resolvable string
@@ -235,7 +238,7 @@ function create_dummy() {
 # type:   One of (bios, efi, swap, ext4)
 # label:  The label for the formatted disk
 function format() {
-	local known_arguments=('+id' '+type' '?label')
+	local known_arguments=('+id' '+type' '?label' '?subvolumes')
 	local extra_arguments=()
 	declare -A arguments; parse_arguments "$@"
 
@@ -282,6 +285,32 @@ function format_btrfs() {
 	DISK_ACTIONS+=("action=format_btrfs" "$@" ";")
 }
 
+# Resolves swap=auto to a size based on the RAM of the machine running the installer.
+# <=2GiB RAM: twice the RAM (min 2GiB), <=8GiB: as much as RAM, more: 8GiB.
+# Any other value (a size, or false) is returned unchanged.
+function resolve_swap_size() {
+	local size="$1"
+	if [[ $size != "auto" ]]; then
+		echo -n "$size"
+		return 0
+	fi
+	local kb gib
+	kb="$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo 2>/dev/null)" || kb=0
+	gib=$(( (${kb:-0} + 1048575) / 1048576 ))
+	[[ $gib -lt 1 ]] && gib=1
+	if [[ $gib -le 2 ]]; then
+		echo -n "$((gib * 2 > 2 ? gib * 2 : 2))GiB"
+	elif [[ $gib -le 8 ]]; then
+		echo -n "${gib}GiB"
+	else
+		echo -n "8GiB"
+	fi
+}
+
+# Btrfs subvolumes created by the recommended layout: <name>:<mountpoint>
+BTRFS_RECOMMENDED_SUBVOLUMES="home:/home;snapshots:/.snapshots;log:/var/log;cache:/var/cache"
+BTRFS_MOUNT_OPTS="defaults,noatime,compress=zstd:1"
+
 # Returns a comma separated list of all registered ids matching the given regex.
 function expand_ids() {
 	local regex="$1"
@@ -298,14 +327,16 @@ function expand_ids() {
 #   luks=[true|false]     Encrypt root partition. Defaults to false if not given.
 #   root_fs=[ext4|btrfs]  Root filesystem
 function create_classic_single_disk_layout() {
-	local known_arguments=('+swap' '?type' '?luks' '?root_fs')
+	local known_arguments=('+swap' '?type' '?luks' '?root_fs' '?subvolumes')
 	local extra_arguments=()
 	declare -A arguments; parse_arguments "$@"
 
 	[[ ${#extra_arguments[@]} -eq 1 ]] \
 		|| die_trace 1 "Expected exactly one positional argument (the device)"
 	local device="${extra_arguments[0]}"
-	local size_swap="${arguments[swap]}"
+	local use_subvolumes="${arguments[subvolumes]:-false}"
+	local size_swap
+	size_swap="$(resolve_swap_size "${arguments[swap]}")"
 	local type="${arguments[type]:-efi}"
 	local use_luks="${arguments[luks]:-false}"
 	local root_fs="${arguments[root_fs]:-ext4}"
@@ -322,10 +353,14 @@ function create_classic_single_disk_layout() {
 		root_id="part_luks_root"
 	fi
 
-	format id="part_$type" type="$type" label="$type"
+	format id="part_$type" type="$type" label="${type^^}"
 	[[ $size_swap != "false" ]] \
 		&& format id=part_swap type=swap label=swap
-	format id="$root_id" type="$root_fs" label=root
+	if [[ $root_fs == "btrfs" && $use_subvolumes == "true" ]]; then
+		format id="$root_id" type="$root_fs" label=root subvolumes="$BTRFS_RECOMMENDED_SUBVOLUMES"
+	else
+		format id="$root_id" type="$root_fs" label=root
+	fi
 
 	if [[ $type == "efi" ]]; then
 		DISK_ID_EFI="part_$type"
@@ -338,13 +373,155 @@ function create_classic_single_disk_layout() {
 
 	if [[ $root_fs == "btrfs" ]]; then
 		DISK_ID_ROOT_TYPE="btrfs"
-		DISK_ID_ROOT_MOUNT_OPTS="defaults,noatime,compress-force=zstd,subvol=/root"
+		DISK_ID_ROOT_MOUNT_OPTS="$BTRFS_MOUNT_OPTS,subvol=/root"
+		if [[ $use_subvolumes == "true" ]]; then
+			local sv name mp
+			local IFS_SAVE="$IFS"
+			for sv in ${BTRFS_RECOMMENDED_SUBVOLUMES//;/ }; do
+				name="${sv%%:*}"
+				mp="${sv#*:}"
+				DISK_EXTRA_MOUNTS+=("$root_id|$mp|btrfs|$BTRFS_MOUNT_OPTS,subvol=/$name")
+			done
+			IFS="$IFS_SAVE"
+		fi
 	elif [[ $root_fs == "ext4" ]]; then
 		DISK_ID_ROOT_TYPE="ext4"
 		DISK_ID_ROOT_MOUNT_OPTS="defaults,noatime,errors=remount-ro,discard"
 	else
 		die "Unsupported root filesystem type"
 	fi
+}
+
+# Single disk with a freely defined partition list (boot partition first, then the given parts).
+# Parameters:
+#   parts=<spec>          Semicolon separated partitions, each "<size>:<mountpoint>:<fs>[:luks]":
+#                           size:       e.g. 8GiB, 512MiB, or "remaining" (last partition only)
+#                           mountpoint: "swap" for swap, "/" for the root, or an absolute path (/home, /var, ...)
+#                           fs:         ext4 | btrfs | swap
+#                           luks:       encrypts the partition; only allowed for the root ("/") partition
+#                         Example: parts='8GiB:swap:swap;40GiB:/:btrfs:luks;remaining:/home:ext4'
+#   type=[efi|bios]       Selects the boot type. Defaults to efi if not given.
+#   boot_size=<size>      Size of the efi/bios partition. Defaults to 1GiB.
+function create_manual_layout() {
+	local known_arguments=('+parts' '?type' '?boot_size')
+	local extra_arguments=()
+	declare -A arguments; parse_arguments "$@"
+
+	[[ ${#extra_arguments[@]} -eq 1 ]] \
+		|| die_trace 1 "Expected exactly one positional argument (the device)"
+	local device="${extra_arguments[0]}"
+	local type="${arguments[type]:-efi}"
+	local boot_size="${arguments[boot_size]:-1GiB}"
+	verify_option type efi bios
+
+	local rows=()
+	local row
+	local IFS_SAVE="$IFS"
+	IFS=';' read -ra rows <<< "${arguments[parts]}"
+	IFS="$IFS_SAVE"
+
+	# Validate the whole specification first, so errors show up before anything is created.
+	local size_re='^([0-9]+(\.[0-9]+)?(K|M|G|T|KiB|MiB|GiB|TiB)|remaining)$'
+	local mp_re='^/[A-Za-z0-9._/-]*$'
+	local n=0 size mount fs luks
+	local have_root=false have_swap=false saw_remaining=false
+	local -A seen_mounts=()
+	local valid_rows=()
+	for row in "${rows[@]}"; do
+		[[ -n $row ]] || continue
+		size="" mount="" fs="" luks=""
+		IFS=':' read -r size mount fs luks <<< "$row"
+		[[ $saw_remaining == "false" ]] \
+			|| die_trace 1 "Partition '$row' comes after size=remaining; 'remaining' is only allowed for the last partition"
+		[[ $size =~ $size_re ]] \
+			|| die_trace 1 "Invalid partition size '$size' in '$row'"
+		[[ $size == "remaining" ]] && saw_remaining=true
+		verify_manual_fs "$fs" "$row"
+		if [[ $mount == "swap" ]]; then
+			[[ $fs == "swap" ]] || die_trace 1 "Swap partition '$row' must use fs=swap"
+			[[ $have_swap == "false" ]] || die_trace 1 "Only one swap partition is supported"
+			[[ -z $luks ]] || die_trace 1 "Encrypting swap is not supported ('$row')"
+			have_swap=true
+		else
+			[[ $fs != "swap" ]] || die_trace 1 "fs=swap is only valid for the 'swap' mountpoint ('$row')"
+			[[ $mount =~ $mp_re ]] || die_trace 1 "Invalid mountpoint '$mount' in '$row'"
+			[[ $mount != "/boot" && $mount != /boot/* ]] \
+				|| die_trace 1 "'$mount' is managed by the installer (the boot partition); remove it from the list"
+			[[ ! -v seen_mounts[$mount] ]] || die_trace 1 "Mountpoint '$mount' is used twice"
+			seen_mounts[$mount]=true
+			if [[ $mount == "/" ]]; then
+				have_root=true
+			fi
+			[[ -z $luks || $luks == "luks" ]] || die_trace 1 "Unknown option '$luks' in '$row' (expected 'luks')"
+			[[ -z $luks || $mount == "/" ]] \
+				|| die_trace 1 "Only the root partition can be encrypted ('$row'). Use the btrfs subvolume layout to encrypt /home too."
+		fi
+		valid_rows+=("$size:$mount:$fs:$luks")
+	done
+	[[ $have_root == "true" ]] || die_trace 1 "The partition list needs a root ('/') partition"
+
+	# Create the partitions
+	create_gpt new_id=gpt device="$device"
+	create_partition new_id="part_$type" id=gpt size="$boot_size" type="$type"
+	for row in "${valid_rows[@]}"; do
+		n=$((n + 1))
+		IFS=':' read -r size mount fs luks <<< "$row"
+		if [[ $fs == "swap" ]]; then
+			create_partition new_id="part_$n" id=gpt size="$size" type=swap
+		else
+			create_partition new_id="part_$n" id=gpt size="$size" type=linux
+		fi
+	done
+
+	# Encrypt, format and register the mounts
+	format id="part_$type" type="$type" label="${type^^}"
+	if [[ $type == "efi" ]]; then
+		DISK_ID_EFI="part_$type"
+	else
+		DISK_ID_BIOS="part_$type"
+	fi
+	n=0
+	local id label opts
+	for row in "${valid_rows[@]}"; do
+		n=$((n + 1))
+		IFS=':' read -r size mount fs luks <<< "$row"
+		id="part_$n"
+		if [[ $luks == "luks" ]]; then
+			create_luks new_id=part_luks_root name="root" id="$id"
+			id="part_luks_root"
+		fi
+		case "$mount" in
+			swap) label="swap" ;;
+			/)    label="root" ;;
+			*)    label="${mount##*/}"; label="${label:0:12}" ;;
+		esac
+		format id="$id" type="$fs" label="$label"
+
+		case "$fs" in
+			btrfs) opts="$BTRFS_MOUNT_OPTS" ;;
+			ext4)  opts="defaults,noatime,errors=remount-ro,discard" ;;
+		esac
+		if [[ $mount == "swap" ]]; then
+			DISK_ID_SWAP="$id"
+		elif [[ $mount == "/" ]]; then
+			DISK_ID_ROOT="$id"
+			DISK_ID_ROOT_TYPE="$fs"
+			if [[ $fs == "btrfs" ]]; then
+				DISK_ID_ROOT_MOUNT_OPTS="$opts,subvol=/root"
+			else
+				DISK_ID_ROOT_MOUNT_OPTS="$opts"
+			fi
+		else
+			DISK_EXTRA_MOUNTS+=("$id|$mount|$fs|$opts")
+		fi
+	done
+}
+
+function verify_manual_fs() {
+	case "$1" in
+		ext4|btrfs|swap) ;;
+		*) die_trace 2 "Unsupported filesystem '$1' in '$2' (use ext4, btrfs or swap)" ;;
+	esac
 }
 
 function create_single_disk_layout() {
@@ -401,7 +578,8 @@ function create_zfs_centric_layout() {
 	[[ ${#extra_arguments[@]} -gt 0 ]] \
 		|| die_trace 1 "Expected at least one positional argument (the devices)"
 	local device="${extra_arguments[0]}"
-	local size_swap="${arguments[swap]}"
+	local size_swap
+	size_swap="$(resolve_swap_size "${arguments[swap]}")"
 	local pool_type="${arguments[pool_type]:-stripe}"
 	local type="${arguments[type]:-efi}"
 	local encrypt="${arguments[encrypt]:-false}"
@@ -423,7 +601,7 @@ function create_zfs_centric_layout() {
 		root_ids="${root_ids}$dev_id;"
 	done
 
-	format id="part_${type}_dev0" type="$type" label="$type"
+	format id="part_${type}_dev0" type="$type" label="${type^^}"
 	[[ $size_swap != "false" ]] \
 		&& format id="part_swap_dev0" type=swap label=swap
 	format_zfs ids="$root_ids" encrypt="$encrypt" pool_type="$pool_type"
@@ -454,7 +632,8 @@ function create_raid0_luks_layout() {
 
 	[[ ${#extra_arguments[@]} -gt 0 ]] \
 		|| die_trace 1 "Expected at least one positional argument (the devices)"
-	local size_swap="${arguments[swap]}"
+	local size_swap
+	size_swap="$(resolve_swap_size "${arguments[swap]}")"
 	local type="${arguments[type]:-efi}"
 	local root_fs="${arguments[root_fs]:-ext4}"
 
@@ -471,7 +650,7 @@ function create_raid0_luks_layout() {
 	create_raid new_id=part_raid_root name="root" level=0 ids="$(expand_ids '^part_root_dev[[:digit:]]$')"
 	create_luks new_id=part_luks_root name="root" id=part_raid_root
 
-	format id="part_${type}_dev0" type="$type" label="$type"
+	format id="part_${type}_dev0" type="$type" label="${type^^}"
 	[[ $size_swap != "false" ]] \
 		&& format id=part_raid_swap type=swap label=swap
 	format id=part_luks_root type="$root_fs" label=root
@@ -487,7 +666,7 @@ function create_raid0_luks_layout() {
 
 	if [[ $root_fs == "btrfs" ]]; then
 		DISK_ID_ROOT_TYPE="btrfs"
-		DISK_ID_ROOT_MOUNT_OPTS="defaults,noatime,compress=zstd,subvol=/root"
+		DISK_ID_ROOT_MOUNT_OPTS="$BTRFS_MOUNT_OPTS,subvol=/root"
 	elif [[ $root_fs == "ext4" ]]; then
 		DISK_ID_ROOT_TYPE="ext4"
 		DISK_ID_ROOT_MOUNT_OPTS="defaults,noatime,errors=remount-ro,discard"
@@ -511,7 +690,8 @@ function create_btrfs_centric_layout() {
 	[[ ${#extra_arguments[@]} -gt 0 ]] \
 		|| die_trace 1 "Expected at least one positional argument (the devices)"
 	local device="${extra_arguments[0]}"
-	local size_swap="${arguments[swap]}"
+	local size_swap
+	size_swap="$(resolve_swap_size "${arguments[swap]}")"
 	local raid_type="${arguments[raid_type]:-raid0}"
 	local type="${arguments[type]:-efi}"
 	local use_luks="${arguments[luks]:-false}"
@@ -546,7 +726,7 @@ function create_btrfs_centric_layout() {
 		done
 	fi
 
-	format id="part_${type}_dev0" type="$type" label="$type"
+	format id="part_${type}_dev0" type="$type" label="${type^^}"
 	[[ $size_swap != "false" ]] \
 		&& format id="part_swap_dev0" type=swap label=swap
 	format_btrfs ids="$root_ids" label=root raid_type="$raid_type"
@@ -560,7 +740,7 @@ function create_btrfs_centric_layout() {
 		&& DISK_ID_SWAP=part_swap_dev0
 	DISK_ID_ROOT="$root_id"
 	DISK_ID_ROOT_TYPE="btrfs"
-	DISK_ID_ROOT_MOUNT_OPTS="defaults,noatime,compress=zstd,subvol=/root"
+	DISK_ID_ROOT_MOUNT_OPTS="$BTRFS_MOUNT_OPTS,subvol=/root"
 }
 
 function create_btrfs_raid_layout() {
