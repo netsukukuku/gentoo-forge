@@ -270,6 +270,9 @@ BROWSER="firefox-bin"
 # Terminal emulator: default | none | kitty | foot | alacritty | wezterm | ghostty
 # "default" = Konsole / GNOME Terminal / Xfce Terminal / COSMIC Terminal. foot is Wayland-only.
 TERMINAL="default"
+# Xbox One/Series controller + wireless dongle + headset driver (xone, GURU overlay, ~amd64).
+# Built as an out-of-tree module; if the build fails the install continues without it.
+XONE_DRIVER=false
 # Graphics drivers (VIDEO_CARDS in make.conf). "auto" detects your GPU(s).
 # Other values: amd, intel, nouveau, virgl (virtio), qxl (GNOME Boxes/SPICE), vmware, fbdev, or any VIDEO_CARDS string.
 VIDEO_CARDS="auto"

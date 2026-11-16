@@ -430,6 +430,7 @@ function load_default_config() {
 	DISPLAY_MANAGER="auto"
 	BROWSER="firefox-bin"
 	TERMINAL="default"
+	XONE_DRIVER=false
 	VIDEO_CARDS="auto"
 
 	function disk_configuration() {
@@ -1404,6 +1405,7 @@ MENU_ITEMS=(
 	"DISPLAY_MANAGER"
 	"BROWSER"
 	"TERMINAL"
+	"XONE_DRIVER"
 	"VIDEO_CARDS"
 	"SECTION_NETWORK"
 	"NETWORK_BACKEND"
@@ -2015,6 +2017,15 @@ function USER_PASSWORD_menu()  {
 		&& UNSAVED_CHANGES=true
 }
 
+function XONE_DRIVER_tag()   { echo " ├ Xbox wireless driver"; }
+function XONE_DRIVER_label() { on_off_label "$XONE_DRIVER" " ├ "; }
+function XONE_DRIVER_show()  { true; }
+function XONE_DRIVER_help()  { echo "Installs the xone kernel driver (GURU overlay, testing keyword) for the Xbox One/Series controllers, the Xbox Wireless Dongle and compatible headsets, and fetches the dongle firmware from Microsoft. It is built as an out-of-tree module for the installed kernel; if that fails the installation continues without it and prints a warning."; }
+function XONE_DRIVER_menu()  {
+	on_off_toggle "XONE_DRIVER"
+	UNSAVED_CHANGES=true
+}
+
 function USER_SUDO_tag()   { echo " └ Administrator (sudo)"; }
 function USER_SUDO_label() { on_off_label "$USER_SUDO" " └ "; }
 function USER_SUDO_show()  { [[ -n $USER_NAME ]]; }
@@ -2590,6 +2601,7 @@ DESKTOP=${DESKTOP@Q}
 DISPLAY_MANAGER=${DISPLAY_MANAGER@Q}
 BROWSER=${BROWSER@Q}
 TERMINAL=${TERMINAL@Q}
+XONE_DRIVER=${XONE_DRIVER@Q}
 VIDEO_CARDS=${VIDEO_CARDS@Q}
 
 

@@ -59,6 +59,7 @@ function apply_config_defaults() {
 	: "${DISPLAY_MANAGER:=auto}"
 	: "${BROWSER:=firefox-bin}"
 	: "${TERMINAL:=default}"
+	: "${XONE_DRIVER:=false}"
 	: "${BOOTLOADER:=systemd-boot}"
 	: "${VIDEO_CARDS:=auto}"
 	: "${USE_BINHOST:=true}"
@@ -85,6 +86,8 @@ function check_config() {
 		[[ $STAGE3_VARIANT == "systemd" || $STAGE3_VARIANT == "openrc" ]] \
 			|| die "Desktop environments are only supported with the plain 'systemd' or 'openrc' stage3 variants."
 	fi
+	[[ $XONE_DRIVER =~ ^(true|false)$ ]] \
+		|| die "XONE_DRIVER must be true or false"
 	[[ $BROWSER =~ ^(none|firefox-bin|firefox|librewolf|zen|waterfox|mullvad)$ ]] \
 		|| die "BROWSER must be one of: none, firefox-bin, firefox, librewolf, zen, waterfox, mullvad"
 	[[ $TERMINAL =~ ^(default|none|kitty|foot|alacritty|wezterm|ghostty)$ ]] \

@@ -794,6 +794,38 @@ function install_overlay_browser() {
 	fi
 }
 
+# Xbox wireless driver (xone) from the GURU overlay. Never fatal: a missing module must not
+# fail the whole installation.
+function install_xone() {
+	[[ ${XONE_DRIVER:-false} == "true" ]] || return 0
+	[[ $GENTOO_ARCH == "amd64" ]] || { ewarn "xone is only enabled for amd64; skipping."; return 0; }
+
+	einfo "Installing the xone Xbox wireless driver (GURU overlay)"
+	if ! enable_overlay guru || [[ ! -d /var/db/repos/guru/games-util/xone ]]; then
+		ewarn "games-util/xone was not found in the guru repository; skipping the Xbox driver."
+		return 0
+	fi
+	mkdir_or_die 0755 /etc/portage/package.accept_keywords
+	echo "games-util/xone ~amd64" > /etc/portage/package.accept_keywords/gentoo-install-xone \
+		|| die "Could not write package.accept_keywords"
+	if ! emerge_auto -- games-util/xone; then
+		ewarn "Could not build games-util/xone for this kernel; continuing without the Xbox driver."
+		return 0
+	fi
+	# Dongle firmware (download from Microsoft). Only needed for the wireless dongle.
+	if command -v xone-get-firmware.sh >/dev/null 2>&1; then
+		xone-get-firmware.sh --skip-disclaimer \
+			|| ewarn "Could not download the dongle firmware; run 'xone-get-firmware.sh' later."
+	else
+		ewarn "Dongle firmware helper not found. For the wireless dongle see https://github.com/dlundqvist/xone"
+	fi
+	# xone replaces the in-kernel xpad / mt76x2u drivers for these devices.
+	if [[ ! -e /etc/modprobe.d/xone-blacklist.conf ]]; then
+		mkdir_or_die 0755 /etc/modprobe.d
+		printf 'blacklist xpad\nblacklist mt76x2u\n' > /etc/modprobe.d/xone-blacklist.conf
+	fi
+}
+
 function configure_greetd_cosmic() {
 	einfo "Configuring greetd with cosmic-greeter"
 	mkdir_or_die 0755 /etc/greetd
@@ -998,6 +1030,7 @@ EOF
 	configure_network
 	setup_sudo
 	install_desktop
+	install_xone
 
 	# Install additional packages, if any.
 	if [[ ${#ADDITIONAL_PACKAGES[@]} -gt 0 ]]; then
