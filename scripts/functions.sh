@@ -60,6 +60,7 @@ function apply_config_defaults() {
 	: "${BROWSER:=firefox-bin}"
 	: "${TERMINAL:=default}"
 	: "${XONE_DRIVER:=false}"
+	: "${FLATPAK:=false}"
 	: "${BOOTLOADER:=systemd-boot}"
 	: "${VIDEO_CARDS:=auto}"
 	: "${USE_BINHOST:=true}"
@@ -88,6 +89,8 @@ function check_config() {
 	fi
 	[[ $XONE_DRIVER =~ ^(true|false)$ ]] \
 		|| die "XONE_DRIVER must be true or false"
+	[[ $FLATPAK =~ ^(true|false)$ ]] \
+		|| die "FLATPAK must be true or false"
 	[[ $BROWSER =~ ^(none|firefox-bin|firefox|librewolf|zen|waterfox|mullvad)$ ]] \
 		|| die "BROWSER must be one of: none, firefox-bin, firefox, librewolf, zen, waterfox, mullvad"
 	[[ $TERMINAL =~ ^(default|none|kitty|foot|alacritty|wezterm|ghostty)$ ]] \

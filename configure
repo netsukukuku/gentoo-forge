@@ -431,6 +431,7 @@ function load_default_config() {
 	BROWSER="firefox-bin"
 	TERMINAL="default"
 	XONE_DRIVER=false
+	FLATPAK=false
 	VIDEO_CARDS="auto"
 
 	function disk_configuration() {
@@ -1406,6 +1407,7 @@ MENU_ITEMS=(
 	"BROWSER"
 	"TERMINAL"
 	"XONE_DRIVER"
+	"FLATPAK"
 	"VIDEO_CARDS"
 	"SECTION_NETWORK"
 	"NETWORK_BACKEND"
@@ -2021,6 +2023,15 @@ function XONE_DRIVER_tag()   { echo " ├ Xbox wireless driver"; }
 function XONE_DRIVER_label() { on_off_label "$XONE_DRIVER" " ├ "; }
 function XONE_DRIVER_show()  { true; }
 function XONE_DRIVER_help()  { echo "Installs the xone kernel driver (GURU overlay, testing keyword) for the Xbox One/Series controllers, the Xbox Wireless Dongle and compatible headsets, and fetches the dongle firmware from Microsoft. It is built as an out-of-tree module for the installed kernel; if that fails the installation continues without it and prints a warning."; }
+function FLATPAK_tag()   { echo " ├ Flatpak + app store"; }
+function FLATPAK_label() { on_off_label "$FLATPAK" " ├ "; }
+function FLATPAK_show()  { true; }
+function FLATPAK_help()  { echo "Installs Flatpak and adds the Flathub repository, so apps such as Steam or Discord can be installed as Flatpaks. With KDE Plasma, the Discover app store is installed too (built with Flatpak support); Discover only shows Flatpak apps, normal Gentoo packages still use emerge."; }
+function FLATPAK_menu()  {
+	on_off_toggle "FLATPAK"
+	UNSAVED_CHANGES=true
+}
+
 function XONE_DRIVER_menu()  {
 	on_off_toggle "XONE_DRIVER"
 	UNSAVED_CHANGES=true
@@ -2603,6 +2614,7 @@ DISPLAY_MANAGER=${DISPLAY_MANAGER@Q}
 BROWSER=${BROWSER@Q}
 TERMINAL=${TERMINAL@Q}
 XONE_DRIVER=${XONE_DRIVER@Q}
+FLATPAK=${FLATPAK@Q}
 VIDEO_CARDS=${VIDEO_CARDS@Q}
 
 

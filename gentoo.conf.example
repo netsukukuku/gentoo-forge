@@ -273,6 +273,9 @@ TERMINAL="default"
 # Xbox One/Series controller + wireless dongle + headset driver (xone, GURU overlay, ~amd64).
 # Built as an out-of-tree module; if the build fails the install continues without it.
 XONE_DRIVER=false
+# Install Flatpak and add Flathub. With DESKTOP=plasma the Discover app store is installed too
+# (Flatpak apps only; normal Gentoo packages still use emerge).
+FLATPAK=false
 # Graphics drivers (VIDEO_CARDS in make.conf). "auto" detects your GPU(s).
 # Other values: amd, intel, nvidia (proprietary driver + open kernel modules, RTX 20+/50 series), nouveau, virgl (virtio), qxl (GNOME Boxes/SPICE), vmware, fbdev, or any VIDEO_CARDS string.
 VIDEO_CARDS="auto"

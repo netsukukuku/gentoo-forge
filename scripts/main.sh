@@ -875,6 +875,30 @@ function install_overlay_browser() {
 	fi
 }
 
+# Flatpak + Flathub, plus the Discover app store on KDE Plasma. Never fatal.
+function install_flatpak() {
+	[[ ${FLATPAK:-false} == "true" ]] || return 0
+
+	einfo "Installing Flatpak"
+	if ! emerge_auto -- sys-apps/flatpak; then
+		ewarn "Could not install sys-apps/flatpak; skipping Flatpak support."
+		return 0
+	fi
+	if ! flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo; then
+		ewarn "Could not add the Flathub repository now. After the first boot run:"
+		ewarn "  flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo"
+	fi
+
+	if [[ ${DESKTOP:-none} == "plasma" ]]; then
+		einfo "Installing the Discover app store (Flatpak backend)"
+		mkdir_or_die 0755 /etc/portage/package.use
+		echo "kde-plasma/discover flatpak" > /etc/portage/package.use/gentoo-install-discover \
+			|| die "Could not write package.use"
+		emerge_auto -- kde-plasma/discover \
+			|| ewarn "Could not install kde-plasma/discover; continuing without it."
+	fi
+}
+
 # Xbox wireless driver (xone) from the GURU overlay. Never fatal: a missing module must not
 # fail the whole installation.
 function install_xone() {
@@ -1117,6 +1141,7 @@ EOF
 	setup_sudo
 	install_desktop
 	install_xone
+	install_flatpak
 
 	# Install additional packages, if any.
 	if [[ ${#ADDITIONAL_PACKAGES[@]} -gt 0 ]]; then

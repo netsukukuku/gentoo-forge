@@ -27,6 +27,7 @@ LUKS and mdraid.
   auto-detected, optional official **binary package host** (signature-checked) for fast installs.
 - **Better partitioning**: the default layout is sized for the machine (swap from RAM) with a 1 GiB boot partition and a btrfs root split into `home`, `snapshots`, `log` and `cache` subvolumes (one passphrase if encrypted). A **custom partitioning editor** lets you add, resize, reorder and delete partitions with ext4/btrfs/swap and per-mountpoint control, with a live preview of the resulting table.
 - **Reworked menu**: sections, a live status line, a layout preview and a final review screen before anything is written.
+- **Extras**: optional Flatpak with Flathub (plus the Discover app store on KDE Plasma), the xone Xbox wireless driver, and NVIDIA's proprietary driver with open kernel modules (auto-selected for RTX 50 series).
 - **Bug fixes** (partition numbers >= 10, `-c` config option, DNS symlink for systemd-resolved, unchecked downloads, ...).
 
 ### Usage
