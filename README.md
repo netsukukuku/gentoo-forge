@@ -49,6 +49,14 @@ Always try it in a VM first (`tests/create-vm-gentoo.sh`, sized for a desktop: 4
 3. Installs firmware, `installkernel`, dracut and `gentoo-kernel-bin`; installs the bootloader.
 4. Sets up networking, sudo and the desktop; enables the needed services.
 
+### Optional desktop extras (`contrib/`)
+
+Not installed by the installer; copy them in after the first boot if you want them.
+
+- `contrib/quickshell/shell.qml`: lavender/black Quickshell bar for niri (niri and Quickshell are in the GURU overlay and need `~amd64` keywords; for Quickshell either accept `dev-cpp/cpptrace ~amd64` or build with `-crash-handler`). Untested on a real niri session.
+- `contrib/quickshell-hyprland/`: a fuller Quickshell shell for Hyprland (see its own README). Hyprland is no longer in the main Gentoo tree; it comes from the `hyproverlay` overlay.
+- `contrib/gentoo.dialogrc`: the TUI colour theme.
+
 ### Updating the kernel
 
 Nothing special: `emerge -auDN @world` pulls a new `gentoo-kernel-bin`, and `installkernel`
@@ -63,7 +71,9 @@ partition via a hook (BIOS). Old kernels stay selectable in the boot menu until 
 - **EFI is the well-trodden path.** BIOS uses syslinux on a small FAT partition plus a kernel hook; it is the least tested.
 - Binary packages only match with the default USE flags and the stable branch; anything else is compiled.
   With the binhost, native `CPU_FLAGS_X86` are not set, so pre-built packages stay usable.
-- Proprietary NVIDIA drivers are not installed automatically (nouveau is used).
+- **NVIDIA:** choosing `nvidia` as video card installs the proprietary driver with the open kernel modules (required for RTX 50 series, selected automatically for them); nouveau is blacklisted then. Other cards use the open-source drivers.
+- **Flatpak:** the option installs `sys-apps/flatpak` and adds Flathub. Flatpak apps (Steam, Discord, ...) are managed with `flatpak` or, on Plasma, the Discover store, which only lists Flatpak apps; normal Gentoo packages still use `emerge`. If Flathub cannot be reached during the install, run `flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo` after the first boot.
+- **xone (Xbox wireless):** built from the GURU overlay as an out-of-tree module; if it fails, the install continues and prints a warning.
 - On OpenRC, PipeWire has to be started per session (see the gentoo wiki, `gentoo-pipewire-launcher`).
 - Optional desktop packages that do not exist in the tree at install time are skipped with a warning
   instead of aborting the installation.
