@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""qs-theme: derive the shell colors from a wallpaper.
+
+  qs-theme set <image>     use this wallpaper and re-color the shell
+  qs-theme random <dir>    pick a random image from <dir>
+  qs-theme next <dir>      next image after the current one (sorted by name)
+  qs-theme glass <20-100>  panel opacity in percent (lower = more see-through)
+  qs-theme show            print the current theme
+
+Needs python3 and ImageMagick (`magick` or `convert`) to decode the image.
+The shell watches ~/.cache/qs-theme/theme.json and updates live.
+"""
+import colorsys, json, os, random, shutil, subprocess, sys
+
+CACHE = os.path.join(os.environ.get("HOME", "~"), ".cache", "qs-theme")
+THEME = os.path.join(CACHE, "theme.json")
+EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+
+
+def load():
+    try:
+        with open(THEME) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save(t):
+    os.makedirs(CACHE, exist_ok=True)
+    tmp = THEME + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(t, f, indent=2)
+    os.replace(tmp, THEME)  # atomic, so the shell never reads half a file
+
+
+def decode(path):
+    """Returns a list of (r, g, b) from a 64x64 downscale of the image."""
+    tool = shutil.which("magick") or shutil.which("convert")
+    if not tool:
+        sys.exit("qs-theme: ImageMagick (magick/convert) is required")
+    cmd = [tool, path + "[0]", "-resize", "64x64!", "-depth", "8", "ppm:-"]
+    out = subprocess.run(cmd, capture_output=True)
+    if out.returncode != 0:
+        sys.exit("qs-theme: could not read image: " + out.stderr.decode(errors="replace").strip())
+    data = out.stdout
+    # binary P6: "P6\n64 64\n255\n" + pixels
+    parts = data.split(b"\n", 3)
+    if parts[0] != b"P6":
+        sys.exit("qs-theme: unexpected image data")
+    px = parts[3]
+    return [(px[i], px[i + 1], px[i + 2]) for i in range(0, len(px) - 2, 3)]
+
+
+def hexc(r, g, b):
+    return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
+
+
+def hsv_hex(h, s, v):
+    return hexc(*colorsys.hsv_to_rgb(h % 1.0, max(0, min(1, s)), max(0, min(1, v))))
+
+
+def palette(pixels):
+    buckets = {}
+    for r, g, b in pixels:
+        k = (r >> 5, g >> 5, b >> 5)
+        n, sr, sg, sb = buckets.get(k, (0, 0, 0, 0))
+        buckets[k] = (n + 1, sr + r, sg + g, sb + b)
+    cands = []
+    for n, sr, sg, sb in buckets.values():
+        h, s, v = colorsys.rgb_to_hsv(sr / n / 255, sg / n / 255, sb / n / 255)
+        # Prefer common, colorful, not-too-dark colors.
+        weight = n * (s ** 1.5) * (1.0 if v > 0.3 else 0.3)
+        cands.append((weight, h, s, v))
+    cands.sort(reverse=True)
+    if not cands or cands[0][0] <= 0:
+        h, s = 0.7, 0.25  # grayscale wallpaper: neutral lavender-ish
+    else:
+        _, h, s, _ = cands[0]
+    accent = (h, max(0.30, min(0.65, s)), 0.90)
+    # Second accent: a different-looking hue if the wallpaper has one.
+    h2 = None
+    for _, ch, cs, cv in cands[1:]:
+        d = min(abs(ch - h), 1 - abs(ch - h))
+        if cs > 0.25 and d > 0.08:
+            h2 = ch
+            break
+    if h2 is None:
+        h2 = h + 0.06
+    return {
+        "bg": hsv_hex(h, 0.30, 0.06),
+        "surface": hsv_hex(h, 0.28, 0.14),
+        "accent": hsv_hex(*accent),
+        "accent2": hsv_hex(h2, 0.40, 0.78),
+        "fg": hsv_hex(h, 0.07, 0.93),
+        "dim": hsv_hex(h, 0.18, 0.55),
+    }
+
+
+def cmd_set(path):
+    path = os.path.realpath(os.path.expanduser(path))
+    if not os.path.isfile(path):
+        sys.exit("qs-theme: no such file: " + path)
+    t = load()
+    t.update(palette(decode(path)))
+    t["wallpaper"] = path
+    t.setdefault("glass", 0.72)
+    save(t)
+    print("wallpaper:", path)
+    print("accent:", t["accent"], " accent2:", t["accent2"], " bg:", t["bg"])
+
+
+def images(d):
+    d = os.path.expanduser(d)
+    if not os.path.isdir(d):
+        sys.exit("qs-theme: not a directory: " + d)
+    return sorted(os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(EXTS))
+
+
+def main(argv):
+    if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+    c = argv[1]
+    if c == "set" and len(argv) == 3:
+        cmd_set(argv[2])
+    elif c == "random" and len(argv) == 3:
+        imgs = images(argv[2])
+        if not imgs:
+            sys.exit("qs-theme: no images found")
+        cmd_set(random.choice(imgs))
+    elif c == "next" and len(argv) == 3:
+        imgs = images(argv[2])
+        if not imgs:
+            sys.exit("qs-theme: no images found")
+        cur = load().get("wallpaper")
+        i = (imgs.index(cur) + 1) % len(imgs) if cur in imgs else 0
+        cmd_set(imgs[i])
+    elif c == "glass" and len(argv) == 3:
+        try:
+            pct = float(argv[2])
+        except ValueError:
+            sys.exit("qs-theme: glass takes a number between 20 and 100")
+        t = load()
+        t["glass"] = max(20, min(100, pct)) / 100
+        save(t)
+    elif c == "show":
+        print(json.dumps(load(), indent=2))
+    else:
+        sys.exit("usage: qs-theme set|random|next <path> | glass <20-100> | show")
+
+
+main(sys.argv)

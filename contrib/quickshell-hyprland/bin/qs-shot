@@ -1,0 +1,24 @@
+#!/bin/sh
+# qs-shot area|full  -> screenshot saved to ~/Pictures/Screenshots and copied to the clipboard.
+# Needs grim, slurp (area mode) and wl-clipboard. Notifies through the shell if notify-send exists.
+dir="${XDG_PICTURES_DIR:-$HOME/Pictures}/Screenshots"
+mkdir -p "$dir" || exit 1
+file="$dir/$(date +%Y-%m-%d_%H-%M-%S).png"
+
+case "${1:-area}" in
+	area)
+		geom="$(slurp)" || exit 0   # cancelled with Esc
+		grim -g "$geom" "$file" || exit 1
+		;;
+	full)
+		grim "$file" || exit 1
+		;;
+	*)
+		echo "usage: qs-shot area|full" >&2
+		exit 2
+		;;
+esac
+
+wl-copy < "$file"
+command -v notify-send >/dev/null 2>&1 && notify-send -a Screenshot "Screenshot saved" "$file"
+exit 0
